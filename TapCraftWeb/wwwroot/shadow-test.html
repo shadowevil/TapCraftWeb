@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>TapCraft - Shadow Test Bench</title>
+<style>
+  :root { --bg:#1e1e1e; --panel:#252526; --border:#3c3c3c; --text:#d4d4d4; --accent:#0e639c; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
+    font-family: Consolas, "Cascadia Code", monospace; }
+  .wrap { display:flex; height:100%; }
+  .stage { flex:1; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  canvas { image-rendering: pixelated; background:#0d1117; }
+  .panel { width:300px; background:var(--panel); border-left:1px solid var(--border);
+    padding:14px; overflow-y:auto; }
+  h1 { font-size:14px; margin:0 0 12px; color:#fff; }
+  h2 { font-size:12px; margin:16px 0 6px; color:#9cdcfe; text-transform:uppercase; letter-spacing:.5px; }
+  .row { margin:10px 0; }
+  .row label { display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px; }
+  .row .val { color:#ce9178; }
+  input[type=range] { width:100%; }
+  select, button { width:100%; background:#3c3c3c; color:var(--text); border:1px solid var(--border);
+    padding:6px; font-family:inherit; font-size:12px; border-radius:3px; }
+  button { background:var(--accent); border:none; cursor:pointer; margin-top:6px; }
+  button:hover { background:#1177bb; }
+  .hint { font-size:11px; color:#808080; line-height:1.5; margin-top:8px; }
+  .legend { font-size:11px; color:#808080; margin-top:8px; }
+  code { color:#ce9178; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="stage"><canvas id="c" width="640" height="520"></canvas></div>
+  <div class="panel">
+    <h1>Shadow Test Bench</h1>
+
+    <h2>Object</h2>
+    <div class="row">
+      <select id="sprite">
+        <option value="/assets/objects/tree_1.png">tree_1 (mature)</option>
+        <option value="/assets/objects/tree_2.png">tree_2 (mature)</option>
+        <option value="/assets/objects/adolescent.png">adolescent</option>
+        <option value="/assets/objects/youngling.png">youngling</option>
+        <option value="/assets/objects/sapling.png">sapling</option>
+        <option value="/assets/objects/rock_1.png">rock_1</option>
+        <option value="/assets/objects/rock_2.png">rock_2</option>
+      </select>
+    </div>
+
+    <h2>Shadow shape</h2>
+    <div class="row"><label>Skew (lean) <span class="val" id="skew-v"></span></label>
+      <input id="skew" type="range" min="0" max="1.5" step="0.01" value="0.7" /></div>
+    <div class="row"><label>Squash (rise) <span class="val" id="squash-v"></span></label>
+      <input id="squash" type="range" min="0.1" max="1" step="0.01" value="0.6" /></div>
+    <div class="row"><label>Alpha <span class="val" id="alpha-v"></span></label>
+      <input id="alpha" type="range" min="0" max="1" step="0.01" value="0.32" /></div>
+    <div class="row"><label>Blur (px) <span class="val" id="blur-v"></span></label>
+      <input id="blur" type="range" min="0" max="6" step="0.5" value="0" /></div>
+
+    <h2>Grounding pool</h2>
+    <div class="row"><label><input type="checkbox" id="pool" checked /> Show pool under foot</label></div>
+    <div class="row"><label>Pool alpha <span class="val" id="poola-v"></span></label>
+      <input id="poola" type="range" min="0" max="1" step="0.01" value="0.3" /></div>
+    <div class="row"><label>Pool width <span class="val" id="poolw-v"></span></label>
+      <input id="poolw" type="range" min="0.3" max="1.6" step="0.05" value="0.9" /></div>
+    <div class="row"><label>Pool ratio (flatness) <span class="val" id="poolr-v"></span></label>
+      <input id="poolr" type="range" min="0.15" max="0.7" step="0.01" value="0.4" /></div>
+
+    <h2>View</h2>
+    <div class="row"><label>Zoom <span class="val" id="zoom-v"></span></label>
+      <input id="zoom" type="range" min="1" max="6" step="0.5" value="4" /></div>
+    <div class="row"><label><input type="checkbox" id="flip" /> Flip sprite</label></div>
+    <div class="row"><label><input type="checkbox" id="grid" checked /> Show tile + base marker</label></div>
+
+    <button id="copy">Copy values for game.js</button>
+    <p class="legend">Light source: <b>right</b> &rarr; shadow casts <b>up-left</b>.</p>
+    <p class="hint">The shadow has two parts: a soft <b>grounding pool</b> centred under the
+      object's foot (keeps the base looking anchored/centred) and the silhouette
+      <b>cast</b> sheared up-left + squashed onto the ground. Tune the sliders, then click
+      Copy and paste the constants into <code>game.js</code>.</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  const cv = document.getElementById("c");
+  const ctx = cv.getContext("2d");
+  ctx.imageSmoothingEnabled = false;
+
+  const SPRITE = 32, HALF_W = 16, HALF_H = 8, OBJECT_LIFT = 8;
+
+  const els = {
+    sprite: document.getElementById("sprite"),
+    skew: document.getElementById("skew"), squash: document.getElementById("squash"),
+    alpha: document.getElementById("alpha"), blur: document.getElementById("blur"),
+    pool: document.getElementById("pool"), poola: document.getElementById("poola"),
+    poolw: document.getElementById("poolw"), poolr: document.getElementById("poolr"),
+    zoom: document.getElementById("zoom"), flip: document.getElementById("flip"),
+    grid: document.getElementById("grid"), copy: document.getElementById("copy"),
+  };
+
+  let img = new Image();
+  let shadow = null;   // black silhouette canvas, with ._sb foot geometry
+  const poolSprite = buildPool();
+
+  // Radial black->transparent disc, reused as the soft grounding pool.
+  function buildPool() {
+    const S = 128;
+    const c = document.createElement("canvas");
+    c.width = S; c.height = S;
+    const m = c.getContext("2d");
+    const g = m.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+    g.addColorStop(0, "rgba(0,0,0,1)");
+    g.addColorStop(0.55, "rgba(0,0,0,0.5)");
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    m.fillStyle = g;
+    m.fillRect(0, 0, S, S);
+    return c;
+  }
+
+  // Bake a black silhouette + measure foot geometry (same as game.js buildShadow).
+  function buildShadow(src) {
+    const w = src.naturalWidth, h = src.naturalHeight;
+    const c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    const m = c.getContext("2d");
+    m.drawImage(src, 0, 0);
+    const data = m.getImageData(0, 0, w, h).data;
+    m.globalCompositeOperation = "source-in";
+    m.fillStyle = "#000";
+    m.fillRect(0, 0, w, h);
+    let minx = w, maxx = -1, maxy = -1;
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++)
+        if (data[(y * w + x) * 4 + 3] > 8) {
+          if (x < minx) minx = x; if (x > maxx) maxx = x; if (y > maxy) maxy = y;
+        }
+    let fsum = 0, fcount = 0;
+    for (let y = Math.max(0, maxy - 5); y <= maxy && maxy >= 0; y++)
+      for (let x = 0; x < w; x++)
+        if (data[(y * w + x) * 4 + 3] > 8) { fsum += x; fcount++; }
+    c._sb = { footX: fcount ? fsum / fcount : w / 2, maxy: maxy < 0 ? h - 1 : maxy,
+              w: (maxx >= minx) ? (maxx - minx + 1) : w };
+    return c;
+  }
+
+  function load(srcUrl) {
+    img = new Image();
+    img.onload = () => { shadow = buildShadow(img); draw(); };
+    img.src = srcUrl;
+  }
+
+  // Mirrors game.js spriteRect.
+  function spriteRect(s, z, lift, sc) {
+    const dw = img.naturalWidth * sc * z;
+    const dh = img.naturalHeight * sc * z;
+    const dx = s.x - dw / 2;
+    const dy = s.y - dh + (SPRITE / 2) * z * sc + lift * z;
+    return { dw, dh, dx, dy };
+  }
+
+  function drawTile(s, z) {
+    // simple grass-colored diamond so we can see the ground plane
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y - HALF_H * z);
+    ctx.lineTo(s.x + HALF_W * z, s.y);
+    ctx.lineTo(s.x, s.y + HALF_H * z);
+    ctx.lineTo(s.x - HALF_W * z, s.y);
+    ctx.closePath();
+    ctx.fillStyle = "#3f8f3a";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,.25)";
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function draw() {
+    const z = +els.zoom.value;
+    const skew = +els.skew.value, squash = +els.squash.value;
+    const alpha = +els.alpha.value, blur = +els.blur.value;
+    const flip = els.flip.checked;
+    const lift = OBJECT_LIFT;
+
+    const poolAlpha = +els.poola.value, poolW = +els.poolw.value, poolR = +els.poolr.value;
+    const showPool = els.pool.checked;
+
+    document.getElementById("skew-v").textContent = skew.toFixed(2);
+    document.getElementById("squash-v").textContent = squash.toFixed(2);
+    document.getElementById("alpha-v").textContent = alpha.toFixed(2);
+    document.getElementById("blur-v").textContent = blur.toFixed(1);
+    document.getElementById("poola-v").textContent = poolAlpha.toFixed(2);
+    document.getElementById("poolw-v").textContent = poolW.toFixed(2);
+    document.getElementById("poolr-v").textContent = poolR.toFixed(2);
+    document.getElementById("zoom-v").textContent = z.toFixed(1);
+
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    const s = { x: cv.width / 2, y: cv.height * 0.62 };
+
+    if (els.grid.checked) drawTile(s, z);
+    if (!img.naturalWidth || !shadow) return;
+
+    const r = spriteRect(s, z, lift, sc());
+    const meta = shadow._sb;
+    // Pin to the true opaque foot (not the padded image edge) so short/padded
+    // sprites (saplings, rocks) don't float above their shadow.
+    const footRows = meta ? (meta.maxy + 1) : img.naturalHeight;
+    const groundY = r.dy + footRows * z * sc();
+    const baseX = s.x;
+
+    // --- grounding pool: soft ellipse under the foot ---
+    if (showPool && meta) {
+      const fx = r.dx + meta.footX * z * sc();
+      const pw = meta.w * poolW * z * sc();
+      const ph = pw * poolR;
+      ctx.globalAlpha = poolAlpha;
+      ctx.drawImage(poolSprite, fx - pw / 2, groundY - ph / 2, pw, ph);
+      ctx.globalAlpha = 1;
+    }
+
+    // --- shadow: opaque foot pinned to groundY, sheared UP-LEFT, squashed ---
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    if (blur > 0 && ctx.filter !== undefined) ctx.filter = "blur(" + blur + "px)";
+    ctx.translate(baseX, groundY);
+    // matrix(a,b,c,d,e,f): x'=a*x+c*y, y'=b*x+d*y
+    // positive c with y in [-dh..0] pushes the top of the sprite to -x (left)
+    ctx.transform(flip ? -1 : 1, 0, skew, squash, 0, 0);
+    ctx.drawImage(shadow, -r.dw / 2, -footRows * z * sc(), r.dw, r.dh);
+    ctx.restore();
+    ctx.filter = "none";
+    ctx.globalAlpha = 1;
+
+    // --- sprite on top ---
+    if (flip) {
+      ctx.save();
+      ctx.translate(r.dx + r.dw, r.dy);
+      ctx.scale(-1, 1);
+      ctx.drawImage(img, 0, 0, r.dw, r.dh);
+      ctx.restore();
+    } else {
+      ctx.drawImage(img, r.dx, r.dy, r.dw, r.dh);
+    }
+
+    if (els.grid.checked) {
+      ctx.fillStyle = "#ff3b3b";
+      ctx.beginPath(); ctx.arc(baseX, groundY, 2.5, 0, 7); ctx.fill();
+    }
+  }
+  function sc() { return 1; }
+
+  for (const k of ["skew","squash","alpha","blur","poola","poolw","poolr","zoom"])
+    els[k].addEventListener("input", draw);
+  els.pool.addEventListener("change", draw);
+  els.flip.addEventListener("change", draw);
+  els.grid.addEventListener("change", draw);
+  els.sprite.addEventListener("change", () => load(els.sprite.value));
+  els.copy.addEventListener("click", () => {
+    const txt =
+      "const SHADOW_ALPHA = " + (+els.alpha.value) + ";\n" +
+      "const SHADOW_SKEW = " + (+els.skew.value) + ";\n" +
+      "const SHADOW_SQUASH = " + (+els.squash.value) + ";\n" +
+      "const SHADOW_POOL_ALPHA = " + (+els.poola.value) + ";\n" +
+      "const SHADOW_POOL_RATIO = " + (+els.poolr.value) + ";\n" +
+      "// pool width factor (drawShadow): meta.w * " + (+els.poolw.value) + " * z * sc";
+    navigator.clipboard && navigator.clipboard.writeText(txt);
+    els.copy.textContent = "Copied!";
+    setTimeout(() => (els.copy.textContent = "Copy values for game.js"), 1200);
+  });
+
+  load(els.sprite.value);
+})();
+</script>
+</body>
+</html>

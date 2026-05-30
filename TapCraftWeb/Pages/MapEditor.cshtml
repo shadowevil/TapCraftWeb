@@ -1,0 +1,116 @@
+@page
+@model MapEditorModel
+@{
+    ViewData["Title"] = "Isometric Map Editor";
+}
+
+<link rel="stylesheet" href="~/css/map-editor.css" asp-append-version="true" />
+
+<div id="map-editor" class="map-editor">
+    <header class="me-titlebar">
+        <span class="me-logo" aria-hidden="true"></span>
+        <span class="me-titlebar-text">TapCraftWeb - Isometric Map Editor</span>
+    </header>
+
+    <aside class="me-sidebar">
+        <div class="me-explorer-title">Map Editor</div>
+
+        <section class="me-panel">
+            <h2>Tiles</h2>
+            <div id="me-palette" class="me-palette" role="listbox" aria-label="Tile palette"></div>
+        </section>
+
+        <section class="me-panel">
+            <h2>Objects</h2>
+            <div id="me-objects" class="me-palette" role="listbox" aria-label="Object palette"></div>
+        </section>
+
+        <section class="me-panel">
+            <h2>Grid</h2>
+            <div class="me-field">
+                <label for="me-cols">Columns</label>
+                <input id="me-cols" type="number" min="1" max="512" value="16" />
+            </div>
+            <div class="me-field">
+                <label for="me-rows">Rows</label>
+                <input id="me-rows" type="number" min="1" max="512" value="16" />
+            </div>
+            <button id="me-resize" class="me-btn" type="button">Apply size</button>
+            <label class="me-check">
+                <input id="me-show-grid" type="checkbox" checked /> Show grid lines
+            </label>
+        </section>
+
+        <section class="me-panel">
+            <h2>Map</h2>
+            <button id="me-fill" class="me-btn" type="button">Fill with tile</button>
+            <button id="me-clear" class="me-btn me-btn-danger" type="button">Clear all</button>
+            <div class="me-row">
+                <button id="me-save" class="me-btn" type="button">Save</button>
+                <button id="me-load" class="me-btn" type="button">Load</button>
+            </div>
+            <div class="me-row">
+                <button id="me-export" class="me-btn" type="button">Export</button>
+                <button id="me-import" class="me-btn" type="button">Import</button>
+            </div>
+            <button id="me-reset-view" class="me-btn" type="button">Reset view</button>
+        </section>
+
+        <section class="me-panel">
+            <h2>Generate</h2>
+            <div class="me-field">
+                <label for="me-gen-w">Width</label>
+                <input id="me-gen-w" type="number" min="4" max="512" value="100" />
+            </div>
+            <div class="me-field">
+                <label for="me-gen-h">Height</label>
+                <input id="me-gen-h" type="number" min="4" max="512" value="100" />
+            </div>
+            <div class="me-field">
+                <label for="me-gen-seed">Seed</label>
+                <input id="me-gen-seed" type="number" min="0" step="1" />
+            </div>
+            <button id="me-gen-random" class="me-btn me-btn-ghost" type="button">Random seed</button>
+            <div class="me-field">
+                <label for="me-gen-land">Land</label>
+                <span id="me-gen-land-val">55%</span>
+            </div>
+            <input id="me-gen-land" class="me-range" type="range" min="0" max="100" value="55" />
+            <button id="me-generate" class="me-btn" type="button">Generate island</button>
+        </section>
+
+        <section class="me-panel me-help-panel">
+            <h2>Shortcuts</h2>
+            <div class="me-help">
+                <p><strong>Left-click / drag</strong> place selected tile/object</p>
+                <p><strong>Right-click / drag</strong> erase (object, then tile)</p>
+                <p><strong>Middle-drag</strong> or <strong>Space+drag</strong> pan</p>
+                <p><strong>Wheel</strong> zoom</p>
+            </div>
+        </section>
+    </aside>
+
+    <div class="me-stage">
+        <canvas id="me-canvas"></canvas>
+    </div>
+
+    <footer class="me-statusbar">
+        <span class="me-status-accent" aria-hidden="true"></span>
+        <span id="me-status" class="me-status">-</span>
+    </footer>
+</div>
+
+<dialog id="me-io-dialog" class="me-dialog">
+    <form method="dialog">
+        <h2 id="me-io-title">Map data</h2>
+        <textarea id="me-io-text" spellcheck="false" rows="14"></textarea>
+        <menu>
+            <button id="me-io-confirm" value="confirm" class="me-btn">OK</button>
+            <button value="cancel" class="me-btn me-btn-ghost">Close</button>
+        </menu>
+    </form>
+</dialog>
+
+@section Scripts {
+    <script src="~/js/map-editor.js" asp-append-version="true"></script>
+}

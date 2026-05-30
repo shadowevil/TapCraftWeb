@@ -1,0 +1,378 @@
+/* Visual Studio / VS Code "Dark+" inspired theme. */
+:root {
+  --vsc-editor-bg: #1e1e1e;     /* main editor surface */
+  --vsc-sidebar-bg: #252526;    /* explorer sidebar */
+  --vsc-titlebar-bg: #2d2d30;   /* Visual Studio title bar */
+  --vsc-statusbar-bg: #007acc;  /* signature VS Code blue */
+  --vsc-panel-bg: #252526;
+  --vsc-border: #3c3c3c;
+  --vsc-border-strong: #474747;
+  --vsc-text: #cccccc;
+  --vsc-text-bright: #ffffff;
+  --vsc-text-muted: #858585;
+  --vsc-section: #bbbbbb;
+  --vsc-btn-bg: #0e639c;
+  --vsc-btn-hover: #1177bb;
+  --vsc-btn-ghost: #3a3d41;
+  --vsc-btn-ghost-hover: #45494e;
+  --vsc-input-bg: #3c3c3c;
+  --vsc-focus: #007acc;
+  --vsc-selection: #094771;     /* active list selection */
+  --vsc-hover: #2a2d2e;
+  --vsc-danger: #a1260d;
+  --vsc-danger-hover: #b3310f;
+  --me-sidebar-w: 256px;
+
+  --me-titlebar-h: 30px;
+  --me-statusbar-h: 22px;
+}
+
+.map-editor {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-columns: var(--me-sidebar-w) 1fr;
+  grid-template-rows: var(--me-titlebar-h) 1fr var(--me-statusbar-h);
+  grid-template-areas:
+    "title  title"
+    "side   stage"
+    "status status";
+  color: var(--vsc-text);
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  font-size: 13px;
+  background: var(--vsc-editor-bg);
+}
+
+/* Title bar ----------------------------------------------------------- */
+.me-titlebar {
+  grid-area: title;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: var(--vsc-titlebar-bg);
+  border-bottom: 1px solid var(--vsc-border);
+  font-size: 12px;
+  color: #d4d4d4;
+  user-select: none;
+}
+
+.me-logo {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  background: linear-gradient(135deg, #5c2d91 0%, #007acc 100%);
+}
+
+/* Sidebar (explorer) -------------------------------------------------- */
+.me-sidebar {
+  grid-area: side;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: var(--vsc-sidebar-bg);
+  border-right: 1px solid var(--vsc-border);
+}
+
+.me-explorer-title {
+  padding: 8px 16px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--vsc-text-muted);
+}
+
+.me-panel {
+  border-top: 1px solid var(--vsc-border);
+  padding: 8px 14px 12px;
+}
+
+.me-panel h2 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--vsc-section);
+}
+
+.me-help-panel {
+  margin-top: auto;
+}
+
+/* Palette ------------------------------------------------------------- */
+.me-palette {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+
+.me-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.me-tile:hover {
+  background: var(--vsc-hover);
+}
+
+.me-tile.selected {
+  background: var(--vsc-selection);
+  border-color: var(--vsc-focus);
+}
+
+.me-tile-thumb {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+}
+
+.me-tile-thumb img {
+  width: 48px;
+  height: 48px;
+  object-fit: contain; /* keep aspect ratio for non-square sprites (trees) */
+  image-rendering: pixelated; /* nearest-neighbor / crisp */
+}
+
+/* Checkerboard for the transparent "void" tile */
+.me-tile-thumb.void {
+  background-image:
+    linear-gradient(45deg, #3c3c3c 25%, transparent 25%),
+    linear-gradient(-45deg, #3c3c3c 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #3c3c3c 75%),
+    linear-gradient(-45deg, transparent 75%, #3c3c3c 75%);
+  background-size: 12px 12px;
+  background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+  border-radius: 3px;
+}
+
+.me-tile-name {
+  font-size: 12px;
+  color: var(--vsc-text);
+}
+
+/* Form controls ------------------------------------------------------- */
+.me-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.me-field label {
+  font-size: 13px;
+  color: var(--vsc-text);
+}
+
+.me-field input {
+  width: 72px;
+  padding: 4px 6px;
+  color: var(--vsc-text);
+  background: var(--vsc-input-bg);
+  border: 1px solid var(--vsc-input-bg);
+  border-radius: 2px;
+  outline: none;
+}
+
+.me-field input:focus {
+  border-color: var(--vsc-focus);
+}
+
+.me-range {
+  width: 100%;
+  margin: 2px 0 4px;
+  accent-color: var(--vsc-focus);
+}
+
+.me-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--vsc-text);
+  cursor: pointer;
+}
+
+.me-check input {
+  accent-color: var(--vsc-focus);
+}
+
+.me-btn {
+  width: 100%;
+  padding: 6px 10px;
+  margin-top: 6px;
+  color: var(--vsc-text-bright);
+  font-size: 13px;
+  background: var(--vsc-btn-bg);
+  border: 1px solid transparent;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.me-btn:hover {
+  background: var(--vsc-btn-hover);
+}
+
+.me-btn:focus-visible {
+  outline: 1px solid var(--vsc-focus);
+  outline-offset: 1px;
+}
+
+.me-btn-danger {
+  background: var(--vsc-danger);
+}
+
+.me-btn-danger:hover {
+  background: var(--vsc-danger-hover);
+}
+
+.me-btn-ghost {
+  background: var(--vsc-btn-ghost);
+}
+
+.me-btn-ghost:hover {
+  background: var(--vsc-btn-ghost-hover);
+}
+
+.me-row {
+  display: flex;
+  gap: 6px;
+}
+
+.me-row .me-btn {
+  flex: 1;
+}
+
+.me-help {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--vsc-text-muted);
+}
+
+.me-help p {
+  margin: 0 0 2px;
+}
+
+.me-help strong {
+  color: var(--vsc-text);
+  font-weight: 600;
+}
+
+/* Editor stage -------------------------------------------------------- */
+.me-stage {
+  grid-area: stage;
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 40%, #232323 0%, var(--vsc-editor-bg) 70%);
+}
+
+#me-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+#me-canvas.panning {
+  cursor: grabbing;
+}
+
+/* Status bar (VS Code blue) ------------------------------------------- */
+.me-statusbar {
+  grid-area: status;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  background: var(--vsc-statusbar-bg);
+  color: #ffffff;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.me-status-accent {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+/* Dialog -------------------------------------------------------------- */
+.me-dialog {
+  width: min(560px, 90vw);
+  color: var(--vsc-text);
+  background: var(--vsc-panel-bg);
+  border: 1px solid var(--vsc-border-strong);
+  border-radius: 4px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.me-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.me-dialog h2 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.me-dialog textarea {
+  width: 100%;
+  color: var(--vsc-text);
+  background: var(--vsc-editor-bg);
+  border: 1px solid var(--vsc-border);
+  border-radius: 2px;
+  padding: 8px;
+  font-family: "Cascadia Code", ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  resize: vertical;
+  outline: none;
+}
+
+.me-dialog textarea:focus {
+  border-color: var(--vsc-focus);
+}
+
+.me-dialog menu {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+.me-dialog menu .me-btn {
+  width: auto;
+  min-width: 84px;
+  margin-top: 0;
+}
+
+/* Scrollbars (VS Code style) ----------------------------------------- */
+.me-sidebar::-webkit-scrollbar {
+  width: 10px;
+}
+
+.me-sidebar::-webkit-scrollbar-thumb {
+  background: rgba(121, 121, 121, 0.4);
+}
+
+.me-sidebar::-webkit-scrollbar-thumb:hover {
+  background: rgba(150, 150, 150, 0.6);
+}

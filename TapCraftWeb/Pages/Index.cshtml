@@ -1,0 +1,197 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "TapCraft";
+}
+
+<link rel="stylesheet" href="~/css/game.css" asp-append-version="true" />
+
+<canvas id="tc-canvas" aria-label="TapCraft world"></canvas>
+<canvas id="tc-fx" class="tc-fx" aria-hidden="true"></canvas>
+
+<header id="tc-topbar" class="tc-topbar">
+    <button id="tc-menu-btn" class="tc-icon-btn" type="button" aria-label="Menu" title="Menu">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" /></svg>
+    </button>
+    <div class="tc-topbar-title">TapCraft</div>
+</header>
+
+<div id="tc-subbar" class="tc-subbar">
+    <div class="tc-resource" title="Wood">
+        <img id="tc-wood-icon" src="/assets/icons/icon_small_wood.png" alt="Wood" />
+        <span id="tc-wood-count">0</span>
+    </div>
+    <div class="tc-resource" title="Stone">
+        <img id="tc-stone-icon" src="/assets/icons/icon_stone.png" alt="Stone" />
+        <span id="tc-stone-count">0</span>
+    </div>
+</div>
+
+<div class="tc-playback">
+    <button id="tc-play" class="tc-icon-btn" type="button" aria-label="Play" title="Play">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l11 7-11 7z" /></svg>
+    </button>
+    <button id="tc-pause" class="tc-icon-btn" type="button" aria-label="Pause" title="Pause">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3v14H7zM14 5h3v14h-3z" /></svg>
+    </button>
+</div>
+
+<!-- Crafted items HUD (floating icons under the left of the sub-bar) -->
+<div id="tc-crafted" class="tc-crafted"></div>
+
+<!-- Crafting opener (bottom-left corner) -->
+<button id="tc-craft-btn" class="tc-craft-open" type="button">Craft</button>
+
+<!-- Build opener (bottom-left, next to Craft) -->
+<button id="tc-build-btn" class="tc-build-open" type="button">Build</button>
+
+<!-- Build placement hint (shown while in placement mode) -->
+<div id="tc-build-hint" class="tc-build-hint hidden">
+    Click to place &middot; R to rotate &middot; Esc to cancel
+</div>
+
+<!-- World-anchored building info panel (positioned over the selected building) -->
+<div id="tc-building-panel" class="tc-bpanel hidden">
+    <div class="tc-bpanel-title" id="tc-bpanel-title">Building</div>
+    <div class="tc-bpanel-row"><span class="tc-bpanel-label">Status</span><span id="tc-bpanel-status" class="tc-bpanel-val">Idle</span></div>
+    <div class="tc-bpanel-row"><span class="tc-bpanel-label">Produced</span><span id="tc-bpanel-produced" class="tc-bpanel-val">0</span></div>
+    <div class="tc-bpanel-row"><span class="tc-bpanel-label">Rate</span><span id="tc-bpanel-rate" class="tc-bpanel-val">0 / min</span></div>
+    <div class="tc-bpanel-row"><span class="tc-bpanel-label">In range</span><span id="tc-bpanel-targets" class="tc-bpanel-val">0</span></div>
+    <button id="tc-bpanel-demolish" class="tc-btn tc-btn-danger tc-bpanel-demolish" type="button">Demolish</button>
+</div>
+
+<!-- Floating build panel (same movable/modular system as crafting) -->
+<div id="tc-build-panel" class="tc-panel hidden">
+    <div id="tc-build-titlebar" class="tc-panel-titlebar">
+        <span class="tc-panel-title">Build</span>
+        <button id="tc-build-close" class="tc-panel-close" type="button" aria-label="Close">X</button>
+    </div>
+    <div id="tc-build-list" class="tc-panel-body"></div>
+</div>
+
+<!-- In-game menu (hamburger) -->
+<div id="tc-menu" class="tc-overlay hidden">
+    <div class="tc-card tc-menu-card">
+        <h2>Menu</h2>
+        <button id="tc-resume" class="tc-btn tc-primary" type="button">Resume</button>
+        <button id="tc-options" class="tc-btn" type="button">Options</button>
+        <button id="tc-save" class="tc-btn" type="button">Save</button>
+        <button id="tc-mainmenu" class="tc-btn" type="button">Main Menu</button>
+    </div>
+</div>
+
+<!-- Options: sound channels (opened from the hamburger menu) -->
+<div id="tc-options-modal" class="tc-overlay hidden">
+    <div class="tc-card tc-menu-card">
+        <h2>Sound</h2>
+        <div id="tc-audio-rows"></div>
+        <div class="tc-actions">
+            <button id="tc-options-back" class="tc-btn tc-primary" type="button">Back</button>
+        </div>
+    </div>
+</div>
+
+<!-- Main menu / world select (over a live island background) -->
+<div id="tc-mainmenu-screen" class="tc-overlay tc-mainmenu hidden">
+    <div class="tc-card tc-mainmenu-card">
+        <h1>TapCraft</h1>
+        <p class="tc-sub">Worlds</p>
+        <div id="tc-world-list" class="tc-world-list"></div>
+        <button id="tc-newworld-btn" class="tc-btn tc-primary tc-wide" type="button">New World</button>
+    </div>
+</div>
+
+<!-- Delete confirmation -->
+<div id="tc-confirm" class="tc-overlay hidden">
+    <div class="tc-card tc-menu-card">
+        <h2>Delete world?</h2>
+        <p id="tc-confirm-text" class="tc-confirm-text"></p>
+        <div class="tc-actions">
+            <button id="tc-confirm-cancel" class="tc-btn" type="button">Cancel</button>
+            <button id="tc-confirm-delete" class="tc-btn tc-btn-danger" type="button">Delete</button>
+        </div>
+    </div>
+</div>
+
+<!-- New world / generation -->
+<div id="tc-newworld" class="tc-overlay hidden">
+    <div class="tc-card">
+        <h1>New World</h1>
+        <p class="tc-sub">Generate</p>
+
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-name">Name</label></div>
+            <input id="tc-name" class="tc-text" type="text" maxlength="32" placeholder="World name" />
+        </div>
+
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-size">Map size</label><span id="tc-size-val" class="tc-val"></span></div>
+            <input id="tc-size" class="tc-range" type="range" min="16" max="64" step="1" value="48" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-land">Land / water</label><span id="tc-land-val" class="tc-val"></span></div>
+            <input id="tc-land" class="tc-range" type="range" min="0" max="100" step="1" value="55" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-growth">Growth rate</label><span id="tc-growth-val" class="tc-val"></span></div>
+            <input id="tc-growth" class="tc-range" type="range" min="0.1" max="10" step="0.1" value="1" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-density">Forest density</label><span id="tc-density-val" class="tc-val"></span></div>
+            <input id="tc-density" class="tc-range" type="range" min="0" max="100" step="1" value="40" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-cluster">Forest clustering</label><span id="tc-cluster-val" class="tc-val"></span></div>
+            <input id="tc-cluster" class="tc-range" type="range" min="0" max="100" step="1" value="60" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-rock-density">Rock density</label><span id="tc-rock-density-val" class="tc-val"></span></div>
+            <input id="tc-rock-density" class="tc-range" type="range" min="0" max="100" step="1" value="40" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-rock-cluster">Rock clustering</label><span id="tc-rock-cluster-val" class="tc-val"></span></div>
+            <input id="tc-rock-cluster" class="tc-range" type="range" min="0" max="100" step="1" value="60" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-seed">Seed</label></div>
+            <div class="tc-seed-row">
+                <input id="tc-seed" type="number" min="0" step="1" />
+                <button id="tc-seed-random" class="tc-btn" type="button">Random</button>
+            </div>
+        </div>
+
+        <div class="tc-actions">
+            <button id="tc-newworld-cancel" class="tc-btn" type="button">Cancel</button>
+            <button id="tc-generate" class="tc-btn tc-primary" type="button">Generate</button>
+        </div>
+    </div>
+</div>
+
+<!-- Floating crafting panel -->
+<div id="tc-craft-panel" class="tc-panel hidden">
+    <div id="tc-craft-titlebar" class="tc-panel-titlebar">
+        <span class="tc-panel-title">Crafting</span>
+        <button id="tc-craft-close" class="tc-panel-close" type="button" aria-label="Close">X</button>
+    </div>
+    <div id="tc-craft-list" class="tc-panel-body"></div>
+</div>
+
+<!-- Developer console (toggle with backtick). Blocks game interaction while open. -->
+<div id="tc-console-overlay" class="tc-console-overlay hidden">
+    <div id="tc-console" class="tc-console">
+        <div id="tc-console-log" class="tc-console-log"></div>
+        <div class="tc-console-inputrow">
+            <span class="tc-console-prompt">&gt;</span>
+            <input id="tc-console-input" class="tc-console-input" type="text" autocomplete="off"
+                   autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Console input" />
+        </div>
+    </div>
+</div>
+
+<noscript>
+    <div class="no-script-message">JavaScript is required to run TapCraft.</div>
+</noscript>
+
+@section Scripts {
+    <script type="module" src="~/js/main.js" asp-append-version="true"></script>
+}

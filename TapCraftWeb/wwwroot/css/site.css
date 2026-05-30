@@ -1,0 +1,50 @@
+:root {
+  --game-bg-top: #0b1020;
+  --game-bg-bottom: #04060d;
+  --game-fg: #e2ecff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body.game-shell {
+  color: var(--game-fg);
+  background:
+    radial-gradient(circle at 25% 25%, #1b2550 0%, transparent 45%),
+    radial-gradient(circle at 85% 10%, #0f593f 0%, transparent 32%),
+    linear-gradient(180deg, var(--game-bg-top), var(--game-bg-bottom));
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+}
+
+#game-root {
+  width: 100%;
+  height: 100%;
+}
+
+#game-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
+  image-rendering: auto;
+}
+
+.no-script-message {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  text-align: center;
+  color: #ffcccc;
+  background: rgba(0, 0, 0, 0.8);
+}
