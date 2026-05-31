@@ -5,6 +5,7 @@
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
 import { hash01, inBounds } from "./rng.js";
+import { MINEABLE_TYPES } from "./mineable.js";
 
 // --- Water autotiling -------------------------------------------------
 export function isLand(col, row) {
@@ -67,8 +68,14 @@ function allBuildingImages() {
   }
   return out;
 }
+// Flat list of every mineable sprite Image across all types/variants.
+function allOreImages() {
+  const out = [];
+  for (const typeId of Object.keys(G.oreImages)) out.push(...G.oreImages[typeId]);
+  return out;
+}
 export function buildMasks() {
-  for (const img of [...G.stageImages, ...G.treeImages, ...G.rockImages, ...allBuildingImages()]) {
+  for (const img of [...G.stageImages, ...G.treeImages, ...allOreImages(), ...allBuildingImages()]) {
     if (img && img.complete && img.naturalWidth) img._mask = buildMask(img);
   }
 }
@@ -129,7 +136,7 @@ export function buildPool() {
 }
 export function buildShadows() {
   G.poolSprite = buildPool();
-  for (const img of [...G.stageImages, ...G.treeImages, ...G.rockImages, ...Object.values(G.resImages), ...allBuildingImages()]) {
+  for (const img of [...G.stageImages, ...G.treeImages, ...allOreImages(), ...Object.values(G.resImages), ...allBuildingImages()]) {
     if (img && img.complete && img.naturalWidth) img._shadow = buildShadow(img);
   }
 }
@@ -154,7 +161,14 @@ export function loadImages() {
   }
   GD.objects.tree.stageSprites.forEach((src, i) => queue(G.stageImages, i, src));
   GD.objects.tree.matureSprites.forEach((src, i) => queue(G.treeImages, i, src));
-  GD.objects.rock.variantSprites.forEach((src, i) => queue(G.rockImages, i, src));
+  // Mineable variant sprites, keyed by type id (rock, iron_vein, gold_vein).
+  for (const typeId of MINEABLE_TYPES) {
+    const arr = (G.oreImages[typeId] = []);
+    (GD.objects[typeId].variantSprites || []).forEach((src, i) => {
+      const img = (arr[i] = new Image());
+      pending.push(new Promise((res) => { img.onload = res; img.onerror = res; img.src = src; }));
+    });
+  }
   // Resource pickup icons, keyed by resource id (wood, stone, ...).
   for (const kind of Object.keys(GD.resources)) {
     const img = (G.resImages[kind] = new Image());
@@ -164,6 +178,12 @@ export function loadImages() {
   for (const toolType of Object.keys(GD.tools)) {
     const img = (G.toolImages[toolType] = new Image());
     pending.push(new Promise((res) => { img.onload = res; img.onerror = res; img.src = GD.tools[toolType].icon; }));
+    // Broken-tool icon (floats over an idle hut that has run out of this tool).
+    const brokenSrc = GD.tools[toolType].brokenIcon;
+    if (brokenSrc) {
+      const bimg = (G.brokenIcons[toolType] = new Image());
+      pending.push(new Promise((res) => { bimg.onload = res; bimg.onerror = res; bimg.src = brokenSrc; }));
+    }
   }
   // Building sprites, keyed by building id then facing (SE, SW).
   for (const id of Object.keys(GD.buildings)) {
@@ -171,6 +191,15 @@ export function loadImages() {
     for (const facing of Object.keys(GD.buildings[id].sprites)) {
       const img = (facings[facing] = new Image());
       pending.push(new Promise((res) => { img.onload = res; img.onerror = res; img.src = GD.buildings[id].sprites[facing]; }));
+    }
+    // Optional animated smoke/effect frames (e.g. the Forge chimney smoke).
+    const smoke = GD.buildings[id].smoke;
+    if (smoke && smoke.frames) {
+      const arr = (G.smokeImages[id] = []);
+      smoke.frames.forEach((src, i) => {
+        const img = (arr[i] = new Image());
+        pending.push(new Promise((res) => { img.onload = res; img.onerror = res; img.src = src; }));
+      });
     }
   }
   return Promise.all(pending);

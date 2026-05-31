@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 18,
 
   "tiles": {
     "grass": { "src": "/assets/tiles/grass.png" },
@@ -18,8 +18,12 @@
   },
 
   "resources": {
-    "wood":  { "name": "Wood",  "icon": "/assets/icons/icon_small_wood.png" },
-    "stone": { "name": "Stone", "icon": "/assets/icons/icon_stone.png" }
+    "wood":  { "name": "Wood",  "icon": "/assets/icons/icon_small_wood.png", "fuel": 20 },
+    "stone": { "name": "Stone", "icon": "/assets/icons/icon_stone.png" },
+    "iron": { "name": "Iron", "icon": "/assets/icons/icon_iron.png", "fuelCost": 2, "smeltTo": "iron_ingot" },
+    "gold": { "name": "Gold", "icon": "/assets/icons/icon_gold.png", "fuelCost": 1, "smeltTo": "gold_ingot" },
+    "iron_ingot": { "name": "Iron Ingot", "icon": "/assets/icons/icon_iron_ingot.png" },
+    "gold_ingot": { "name": "Gold Ingot", "icon": "/assets/icons/icon_gold_ingot.png" }
   },
 
   "objects": {
@@ -27,10 +31,11 @@
       "targetable": true,
       "drop": "wood",
       "tool": "hatchet",
+      "toughness": 1,
       "chopClicks": 5,
       "placeableOn": { "tile": "grass", "requireInterior": true },
       "stageSprites": [
-        "/assets/tiles/sprout.png",
+        "/assets/objects/seed_mound.png",
         "/assets/objects/sapling.png",
         "/assets/objects/youngling.png",
         "/assets/objects/adolescent.png"
@@ -44,39 +49,89 @@
       "targetable": true,
       "drop": "stone",
       "tool": "pickaxe",
+      "toughness": 1,
       "placeableOn": { "tile": "grass", "requireInterior": false },
       "variantSprites": [
         "/assets/objects/rock_1.png",
         "/assets/objects/rock_2.png"
       ]
+    },
+    "iron_vein": {
+      "targetable": true,
+      "drop": "iron",
+      "tool": "pickaxe",
+      "toughness": 2,
+      "minCount": 1,
+      "placeableOn": { "tile": "grass", "requireInterior": false },
+      "variantSprites": [
+        "/assets/objects/iron_ore_vein_1.png"
+      ]
+    },
+    "gold_vein": {
+      "targetable": true,
+      "drop": "gold",
+      "tool": "pickaxe",
+      "toughness": 3,
+      "minCount": 1,
+      "placeableOn": { "tile": "grass", "requireInterior": false },
+      "variantSprites": [
+        "/assets/objects/gold_ore_vein_1.png"
+      ]
     }
   },
 
   "tools": {
-    "hatchet": { "name": "Stone Hatchet", "icon": "/assets/icons/cursor_hatchet.png" },
-    "pickaxe": { "name": "Stone Pickaxe", "icon": "/assets/icons/cursor_pickaxe.png" }
+    "hatchet": {
+      "name": "Stone Hatchet", "kind": "hatchet", "tier": 1, "icon": "/assets/icons/cursor_hatchet.png",
+      "brokenIcon": "/assets/icons/broken_hatchet_small.png",
+      "output": 2, "dropChance": 0.50, "swingMs": 500, "sharpness": 1
+    },
+    "pickaxe": {
+      "name": "Stone Pickaxe", "kind": "pickaxe", "tier": 1, "icon": "/assets/icons/cursor_pickaxe.png",
+      "brokenIcon": "/assets/icons/broken_pickaxe_small.png",
+      "output": 2, "dropChance": 0.50, "swingMs": 500, "sharpness": 1
+    },
+    "iron_hatchet": {
+      "name": "Iron Hatchet", "kind": "hatchet", "tier": 2, "icon": "/assets/icons/cursor_hatchet_iron.png",
+      "hudIcon": "/assets/icons/hatchet_iron_small.png",
+      "brokenIcon": "/assets/icons/broken_hatchet_small.png",
+      "output": 2, "dropChance": 0.50, "swingMs": 375, "sharpness": 2, "durability": 100
+    },
+    "iron_pickaxe": {
+      "name": "Iron Pickaxe", "kind": "pickaxe", "tier": 2, "icon": "/assets/icons/cursor_pickaxe_iron.png",
+      "hudIcon": "/assets/icons/pickaxe_iron_small.png",
+      "brokenIcon": "/assets/icons/broken_pickaxe_small.png",
+      "output": 2, "dropChance": 0.50, "swingMs": 375, "sharpness": 2, "durability": 100
+    }
   },
 
   "harvest": {
     "toolDurability": 50,
-    "baseDropChance": 0.25,
-    "toolDropChance": 0.50,
+    "baseDropChance": 0.35,
     "baseOutput": 1,
-    "toolOutput": 2
+    "baseSwingMs": 1000,
+    "baseSharpness": 1,
+    "underSharpMult": 0.25,
+    "overSharpMult": 1.5,
+    "failGap": 2
   },
 
   "crafting": {
     "craftMs": 3000,
     "craftMax": 25,
+    "blacksmithSpeedMult": 0.6,
     "recipes": {
       "stone_hatchet": { "tool": "hatchet", "cost": { "wood": 10, "stone": 5 } },
-      "stone_pickaxe": { "tool": "pickaxe", "cost": { "wood": 10, "stone": 3 } }
+      "stone_pickaxe": { "tool": "pickaxe", "cost": { "wood": 10, "stone": 3 } },
+      "iron_hatchet": { "tool": "iron_hatchet", "cost": { "iron_ingot": 5, "wood": 10 }, "requires": "blacksmith" },
+      "iron_pickaxe": { "tool": "iron_pickaxe", "cost": { "iron_ingot": 5, "wood": 10 }, "requires": "blacksmith" }
     }
   },
 
   "buildings": {
     "logging_hut": {
       "name": "Logging Hut",
+      "category": "harvester",
       "targetKind": "tree",
       "footprint": { "w": 2, "h": 2 },
       "sprites": {
@@ -84,14 +139,17 @@
         "SW": "/assets/buildings/logging_hut_sw.png"
       },
       "placeableTiles": ["grass", "sand"],
-      "buildCost": { "wood": 2000, "stone": 1500 },
+      "buildCost": { "wood": 500, "stone": 375 },
       "harvestRadius": 5,
-      "harvestSpeedMs": 1000,
+      "harvestSpeedMs": 4000,
       "maxTargets": 1,
-      "sweepIntervalMs": 1500
+      "maxTargetPerTools": 25,
+      "speedBonusPerTool": 0.001,
+      "maxSpeedBonus": 0.75
     },
     "mining_hut": {
       "name": "Mining Hut",
+      "category": "harvester",
       "targetKind": "rock",
       "footprint": { "w": 2, "h": 2 },
       "sprites": {
@@ -99,11 +157,52 @@
         "SW": "/assets/buildings/mining_hut_sw.png"
       },
       "placeableTiles": ["grass", "sand"],
-      "buildCost": { "wood": 2000, "stone": 1500 },
+      "buildCost": { "wood": 500, "stone": 375 },
       "harvestRadius": 5,
-      "harvestSpeedMs": 1000,
+      "harvestSpeedMs": 4000,
       "maxTargets": 1,
-      "sweepIntervalMs": 1500
+      "maxTargetPerTools": 25,
+      "speedBonusPerTool": 0.001,
+      "maxSpeedBonus": 0.75
+    },
+    "forge": {
+      "name": "Forge",
+      "category": "smelter",
+      "footprint": { "w": 2, "h": 2 },
+      "sprites": {
+        "SE": "/assets/buildings/forge_hut_se.png",
+        "SW": "/assets/buildings/forge_hut_sw.png"
+      },
+      "placeableTiles": ["grass", "sand"],
+      "buildCost": { "wood": 500, "stone": 250 },
+      "baseSmeltMs": 60000,
+      "fuelResource": "wood",
+      "smelts": ["iron", "gold"],
+      "smoke": {
+        "frames": [
+          "/assets/effects/smoke_1.png",
+          "/assets/effects/smoke_2.png",
+          "/assets/effects/smoke_3.png",
+          "/assets/effects/smoke_4.png"
+        ],
+        "anchor": { "SE": [22, 4], "SW": [45, 3] },
+        "opacity": 0.75,
+        "scale": 1.0,
+        "frameMs": 850,
+        "bobPx": 0.5,
+        "bobMs": 1800
+      }
+    },
+    "blacksmith": {
+      "name": "Blacksmith",
+      "category": "crafting",
+      "footprint": { "w": 2, "h": 2 },
+      "sprites": {
+        "SE": "/assets/buildings/blacksmith_se.png",
+        "SW": "/assets/buildings/blacksmith_sw.png"
+      },
+      "placeableTiles": ["grass", "sand"],
+      "buildCost": { "wood": 500, "stone": 250 }
     }
   },
 
@@ -113,32 +212,40 @@
     "stageFull": 1000,
     "gainMin": 1,
     "gainMax": 5,
-    "harvestIntervalMs": 200,
     "rock": {
       "fillMax": 0.85,
       "scaleTight": 0.16,
       "scaleSpread": 0.05,
       "thresholdBase": 0.72,
       "thresholdDensityFactor": 0.42
+    },
+    "mineral": {
+      "fillMax": 0.45,
+      "scaleTight": 0.20,
+      "scaleSpread": 0.07,
+      "thresholdBase": 0.82,
+      "thresholdDensityFactor": 0.30,
+      "types": ["iron_vein", "gold_vein"]
     }
   },
 
   "defaults": {
     "worldSettings": {
       "landFraction": 0.55, "growthRate": 1.0, "forestDensity": 0.4,
-      "cluster": 0.6, "rockDensity": 0.4, "rockCluster": 0.6
+      "cluster": 0.6, "rockDensity": 0.4, "rockCluster": 0.6, "mineral": 0.4
     },
     "menuForestDensity": 0.5
   },
 
   "sliders": {
-    "size":        { "min": 16,  "max": 64,  "step": 1,   "default": 48 },
+    "size":        { "min": 16,  "max": 100, "step": 1,   "default": 48 },
     "land":        { "min": 0,   "max": 100, "step": 1,   "default": 55 },
     "growth":      { "min": 0.1, "max": 10,  "step": 0.1, "default": 1  },
     "density":     { "min": 0,   "max": 100, "step": 1,   "default": 40 },
     "cluster":     { "min": 0,   "max": 100, "step": 1,   "default": 60 },
     "rockDensity": { "min": 0,   "max": 100, "step": 1,   "default": 40 },
-    "rockCluster": { "min": 0,   "max": 100, "step": 1,   "default": 60 }
+    "rockCluster": { "min": 0,   "max": 100, "step": 1,   "default": 60 },
+    "mineral":     { "min": 0,   "max": 100, "step": 1,   "default": 40 }
   },
 
   "sounds": {

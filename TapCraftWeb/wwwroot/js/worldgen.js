@@ -5,6 +5,7 @@
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
 import { hash01, makeFbm, makeLayer, inBounds } from "./rng.js";
+import { setMineable, hasMineable } from "./mineable.js";
 import { updateResourceUI } from "./ui.js";
 import { updateCraftedHud } from "./crafting.js";
 
@@ -22,13 +23,18 @@ export function generate(cols, rows, seed, settings) {
   G.world.rock = makeLayer(cols, rows, -1);
   G.world.wood = 0;
   G.world.stone = 0;
+  G.world.iron = 0;
+  G.world.gold = 0;
+  G.world.iron_ingot = 0;
+  G.world.gold_ingot = 0;
   G.world.tools = newTools();
   G.world.craft = {};
   G.world.buildings = [];
   resetTransients();
   generateTerrain();
-  seedRocks();   // rocks first so the forest can avoid them
-  seedForest();
+  seedRocks();      // rocks first
+  seedMinerals();   // ore veins next (also on the mineable layer, avoid rocks)
+  seedForest();     // forest avoids any mineable cell
   G.hasWorld = true;
   updateResourceUI();
   updateCraftedHud();
@@ -168,10 +174,77 @@ export function seedRocks() {
       if (field <= threshold) continue;
       const local = (field - threshold) / (1 - threshold);
       if (hash01(c, r, rSeed) < fill * local) {
+        // Stone rock = mineable typeIndex 0, variant 0/1 (unchanged encoding).
         G.world.rock[r][c] = hash01(c, r, vSeed) < 0.5 ? 0 : 1;
       }
     }
   }
+}
+
+// Seed ore veins (iron, gold) on empty grass via a clump field driven by the
+// "mineral" slider, then GUARANTEE each type's minCount by force-placing any
+// shortfall on random eligible cells. Veins share the mineable layer with rocks
+// and never overwrite a rock. Deterministic from the world seed.
+export function seedMinerals() {
+  const cols = G.world.cols, rows = G.world.rows, s = G.world.seed;
+  const density = G.world.settings.mineral != null ? G.world.settings.mineral : 0.4;
+  const cfg = GD.worldgen.mineral;
+  const types = cfg.types || [];
+  const clump = makeFbm((s ^ 0x2c1b3a9f) >>> 0, 3);
+  const scale = cfg.scaleTight + (cfg.scaleSpread - cfg.scaleTight) * density;
+  const threshold = cfg.thresholdBase - cfg.thresholdDensityFactor * density;
+  const fill = cfg.fillMax * density;
+
+  // Eligibility: a placeable, empty (no rock/ore/tree) grass cell.
+  const eligible = (c, r) => {
+    if (!inBounds(c, r)) return false;
+    if (G.world.tiles[r][c] !== "grass") return false;
+    if (hasMineable(c, r)) return false;
+    if (G.world.stage[r][c] >= 0) return false;
+    // keep off the very edge (matches the 2-tile water border)
+    return c >= 2 && r >= 2 && c < cols - 2 && r < rows - 2;
+  };
+
+  const placed = {}; // typeId -> count
+  for (const t of types) placed[t] = 0;
+
+  // Noise pass: scatter veins; pick a type per cell by a hash so iron/gold mix.
+  const tSeed = (s ^ 0x6b43a9c7) >>> 0;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (!eligible(c, r)) continue;
+      const field = clump(c * scale, r * scale);
+      if (field <= threshold) continue;
+      const local = (field - threshold) / (1 - threshold);
+      if (hash01(c, r, (s ^ 0x10a4f2bd) >>> 0) >= fill * local) continue;
+      const ti = Math.floor(hash01(c, r, tSeed) * types.length) % types.length;
+      const typeId = types[ti];
+      setMineable(c, r, typeId, 0);
+      placed[typeId]++;
+    }
+  }
+
+  // Guarantee minCount per type: deterministically force-place any shortfall.
+  for (const typeId of types) {
+    const need = (GD.objects[typeId].minCount | 0) - (placed[typeId] | 0);
+    for (let k = 0; k < need; k++) {
+      const cell = findEligibleCell(eligible, (s ^ 0x9e3b1c77) + typeId.length * 131 + k * 2654435761);
+      if (cell) { setMineable(cell.c, cell.r, typeId, 0); placed[typeId]++; }
+    }
+  }
+}
+
+// Deterministically scan for the first eligible cell starting from a seeded
+// pseudo-random offset (so guaranteed veins are not always in a corner).
+function findEligibleCell(eligible, seedVal) {
+  const cols = G.world.cols, rows = G.world.rows, total = cols * rows;
+  const start = (Math.abs(seedVal | 0) % total + total) % total;
+  for (let i = 0; i < total; i++) {
+    const idx = (start + i * 2654435761) % total; // stride by a large odd-ish step
+    const c = idx % cols, r = (idx - c) / cols;
+    if (eligible(c, r)) return { c, r };
+  }
+  return null;
 }
 
 // Seed forests on eligible grass; trees start at varied stages/progress.

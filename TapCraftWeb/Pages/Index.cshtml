@@ -25,6 +25,22 @@
         <img id="tc-stone-icon" src="/assets/icons/icon_stone.png" alt="Stone" />
         <span id="tc-stone-count">0</span>
     </div>
+    <div class="tc-resource" title="Iron">
+        <img id="tc-iron-icon" src="/assets/icons/icon_iron.png" alt="Iron" />
+        <span id="tc-iron-count">0</span>
+    </div>
+    <div class="tc-resource" title="Gold">
+        <img id="tc-gold-icon" src="/assets/icons/icon_gold.png" alt="Gold" />
+        <span id="tc-gold-count">0</span>
+    </div>
+    <div class="tc-resource" title="Iron Ingot">
+        <img id="tc-iron_ingot-icon" src="/assets/icons/icon_iron_ingot.png" alt="Iron Ingot" />
+        <span id="tc-iron_ingot-count">0</span>
+    </div>
+    <div class="tc-resource" title="Gold Ingot">
+        <img id="tc-gold_ingot-icon" src="/assets/icons/icon_gold_ingot.png" alt="Gold Ingot" />
+        <span id="tc-gold_ingot-count">0</span>
+    </div>
 </div>
 
 <div class="tc-playback">
@@ -39,6 +55,9 @@
 <!-- Crafted items HUD (floating icons under the left of the sub-bar) -->
 <div id="tc-crafted" class="tc-crafted"></div>
 
+<!-- Event message stack (transient toasts above the craft/build buttons) -->
+<div id="tc-events" class="tc-events"></div>
+
 <!-- Crafting opener (bottom-left corner) -->
 <button id="tc-craft-btn" class="tc-craft-open" type="button">Craft</button>
 
@@ -52,11 +71,37 @@
 
 <!-- World-anchored building info panel (positioned over the selected building) -->
 <div id="tc-building-panel" class="tc-bpanel hidden">
-    <div class="tc-bpanel-title" id="tc-bpanel-title">Building</div>
+    <div class="tc-bpanel-head">
+        <img id="tc-bpanel-icon" class="tc-bpanel-icon" alt="" />
+        <span class="tc-bpanel-title" id="tc-bpanel-title">Building</span>
+    </div>
     <div class="tc-bpanel-row"><span class="tc-bpanel-label">Status</span><span id="tc-bpanel-status" class="tc-bpanel-val">Idle</span></div>
-    <div class="tc-bpanel-row"><span class="tc-bpanel-label">Produced</span><span id="tc-bpanel-produced" class="tc-bpanel-val">0</span></div>
-    <div class="tc-bpanel-row"><span class="tc-bpanel-label">Rate</span><span id="tc-bpanel-rate" class="tc-bpanel-val">0 / min</span></div>
-    <div class="tc-bpanel-row"><span class="tc-bpanel-label">In range</span><span id="tc-bpanel-targets" class="tc-bpanel-val">0</span></div>
+    <!-- Harvester rows -->
+    <div class="tc-bpanel-row" data-cat="harvester">
+        <span class="tc-bpanel-label">Tools</span>
+        <span class="tc-bpanel-val tc-bpanel-tools-val"><img id="tc-bpanel-tool-icon" class="tc-bpanel-inline-icon" alt="" /><span id="tc-bpanel-tools">0</span></span>
+    </div>
+    <div class="tc-bpanel-row" data-cat="harvester"><span class="tc-bpanel-label">Workers / Speed</span><span id="tc-bpanel-bonus" class="tc-bpanel-val">1 / +0%</span></div>
+    <div class="tc-bpanel-qty-row" data-cat="harvester">
+        <input id="tc-bpanel-qty" class="tc-range tc-bpanel-qty" type="range" min="1" max="1" step="1" value="1" />
+        <span id="tc-bpanel-qty-val" class="tc-bpanel-qty-val">1</span>
+    </div>
+    <div class="tc-bpanel-tools-row" data-cat="harvester">
+        <button id="tc-bpanel-deposit" class="tc-btn tc-bpanel-tbtn" type="button">Deposit</button>
+        <button id="tc-bpanel-withdraw" class="tc-btn tc-bpanel-tbtn" type="button">Withdraw</button>
+    </div>
+    <div class="tc-bpanel-row" data-cat="harvester"><span class="tc-bpanel-label">Produced</span><span id="tc-bpanel-produced" class="tc-bpanel-val">0</span></div>
+    <div class="tc-bpanel-row" data-cat="harvester"><span class="tc-bpanel-label">Rate</span><span id="tc-bpanel-rate" class="tc-bpanel-val">0 / min</span></div>
+    <div class="tc-bpanel-row" data-cat="harvester"><span class="tc-bpanel-label">In range</span><span id="tc-bpanel-targets" class="tc-bpanel-val">0</span></div>
+    <!-- Smelter (Forge) rows: ore + fuel deposit rows are injected here -->
+    <div id="tc-forge-rows" data-cat="smelter"></div>
+    <!-- Crafting (Blacksmith) note -->
+    <div class="tc-bpanel-row" data-cat="crafting"><span class="tc-bpanel-note">Enables iron tools and speeds stone-tool crafting.</span></div>
+    <!-- Harvester Receive (collects stored output). The Forge builds its own
+         per-ingot Receive buttons inside #tc-forge-rows. -->
+    <button id="tc-bpanel-receive" class="tc-btn tc-primary tc-bpanel-receive" type="button" data-cat="harvester">
+        <img id="tc-bpanel-receive-icon" class="tc-bpanel-inline-icon" alt="" /><span id="tc-bpanel-receive-text">Receive</span>
+    </button>
     <button id="tc-bpanel-demolish" class="tc-btn tc-btn-danger tc-bpanel-demolish" type="button">Demolish</button>
 </div>
 
@@ -151,6 +196,10 @@
         <div class="tc-row">
             <div class="tc-row-head"><label for="tc-rock-cluster">Rock clustering</label><span id="tc-rock-cluster-val" class="tc-val"></span></div>
             <input id="tc-rock-cluster" class="tc-range" type="range" min="0" max="100" step="1" value="60" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-mineral">Mineral cluster</label><span id="tc-mineral-val" class="tc-val"></span></div>
+            <input id="tc-mineral" class="tc-range" type="range" min="0" max="100" step="1" value="40" />
         </div>
         <div class="tc-row">
             <div class="tc-row-head"><label for="tc-seed">Seed</label></div>

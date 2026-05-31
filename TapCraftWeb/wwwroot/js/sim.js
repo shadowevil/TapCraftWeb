@@ -14,7 +14,7 @@ import { growthStep } from "./rng.js";
 import { objectAt, render } from "./render.js";
 import {
   doHarvest, spawnDrop, flushPopDrop, collectDrop,
-  dropHovered, startDropFly, renderFx,
+  dropHovered, startDropFly, renderFx, bestToolId,
 } from "./resources.js";
 import { advanceCrafting } from "./crafting.js";
 import { updateBuildings } from "./buildings.js";
@@ -48,14 +48,24 @@ export function tick() {
 export function updateAnimations(dtMs) {
   const dt = Math.min(0.05, dtMs / 1000);
 
-  // Hold-to-harvest: every HARVEST_INTERVAL_MS, harvest the object under the
-  // cursor IF it matches the kind locked in when the hold began. Other kinds
-  // (and empty cells) are ignored, so a drag sweeps one resource type.
+  // Hold-to-harvest cadence: bare hands swing every baseSwingMs (slow); holding
+  // the matching crafted tool swings at that tool's swingMs (faster). Clicking
+  // (input.js) fires one full swing per click and is unthrottled, so rapid
+  // clicking out-paces holding - active play is rewarded.
   // Disabled while paused (G.running) - no harvesting when the sim is stopped.
-  if (G.running && G.harvesting && G.mouse.on && !G.inMenu && G.animTime - G.lastHarvestAt >= GD.worldgen.harvestIntervalMs) {
-    const obj = objectAt(G.mouse.x, G.mouse.y);
-    if (obj && obj.kind === G.harvestKind) doHarvest(obj);
-    G.lastHarvestAt = G.animTime;
+  if (G.running && G.harvesting && G.mouse.on && !G.inMenu) {
+    // Cadence from the best owned tool of the held kind (trees -> hatchet,
+    // mining -> pickaxe); bare hands use baseSwingMs.
+    const kind = G.harvestKind === "mine" ? "pickaxe" : "hatchet";
+    const toolId = bestToolId(G.world.tools, kind);
+    const interval = toolId ? GD.tools[toolId].swingMs : GD.harvest.baseSwingMs;
+    if (G.animTime - G.lastHarvestAt >= interval) {
+      const obj = objectAt(G.mouse.x, G.mouse.y);
+      // Same category as the hold (any vein/rock = "mine"; mature tree = "tree").
+      const cat = obj ? (obj.mineable ? "mine" : "tree") : null;
+      if (obj && cat === G.harvestKind) doHarvest(obj);
+      G.lastHarvestAt = G.animTime;
+    }
   }
 
   for (const [key, p] of G.pops) {

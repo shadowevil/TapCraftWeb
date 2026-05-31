@@ -9,16 +9,17 @@ import {
 } from "./config.js";
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
-import { canvas, ctx } from "./dom.js";
+import { canvas, ctx, craftedHud } from "./dom.js";
 import { hash01, inBounds } from "./rng.js";
 import { plantSprite, tileSprite, waterFrameIndex } from "./assets.js";
 import {
   cellCenter, worldToScreen, screenToWorld, worldToCell,
   visibleCellBounds, spriteRect, spriteRectAt,
-  buildingFrontTile, buildingAnchor, buildingDiamondWorld, buildingCells,
+  buildingAnchor, buildingDiamondWorld, buildingCells,
 } from "./iso.js";
 import { popFactor, dropImage, dropScreen } from "./resources.js";
-import { canPlaceFootprint, canAffordBuilding, buildingTargets, cellsInRange } from "./buildings.js";
+import { canPlaceFootprint, canAffordBuilding, buildingTargets, cellsInRange, hutToolKind, hutToolCount } from "./buildings.js";
+import { mineableAt, mineableSprite } from "./mineable.js";
 import { positionBuildingPanel, updateBuildHint } from "./ui.js";
 
 // Sprite + placement for a plant cell (shared by render and hit-testing so
@@ -26,20 +27,24 @@ import { positionBuildingPanel, updateBuildHint } from "./ui.js";
 export function plantDrawParams(stage, c, r) {
   const img = plantSprite(stage, c, r);
   if (!img) return null;
-  if (stage === 0) return { img, lift: 0, sc: 1, flip: false };
+  // Stage 0 is a small dirt mound OBJECT on the grass (not a ground-cube tile),
+  // so it lifts like every other stage and needs no special-casing - no scale/
+  // flip jitter on the tiny mound though.
+  if (stage === 0) return { img, lift: OBJECT_LIFT, sc: 1, flip: false };
   const flip = hash01(c, r, (G.world.seed ^ 0x000000a1) >>> 0) < 0.5;
   const sc = 0.9 + hash01(c, r, (G.world.seed ^ 0x000000b2) >>> 0) * 0.2;
   return { img, lift: OBJECT_LIFT, sc, flip };
 }
 
-// The object occupying a cell (rock takes precedence; a cell never has both),
+// The object occupying a cell (mineable takes precedence; a cell never has both),
 // with the draw params render and hit-testing share. null if the cell is bare.
+// A mineable returns kind = its type id (rock/iron_vein/gold_vein) + mineable:true.
 export function cellObject(c, r) {
-  const rk = G.world.rock[r][c];
-  if (rk >= 0) {
-    const img = G.rockImages[rk];
+  const m = mineableAt(c, r);
+  if (m) {
+    const img = mineableSprite(m);
     if (!img) return null;
-    return { kind: "rock", img, lift: 0, sc: 1, flip: false, variant: rk };
+    return { kind: m.typeId, mineable: true, img, lift: OBJECT_LIFT, sc: 1, flip: false, variant: m.variant };
   }
   const st = G.world.stage[r][c];
   if (st >= 0) {
@@ -78,7 +83,7 @@ export function objectAt(px, py) {
       if (ix < 0 || iy < 0 || ix >= w || iy >= h) continue;
       const mask = img._mask;
       if (!mask || mask.a[iy * w + ix] > 16) {
-        return { col: c, row: r, kind: obj.kind, stage: obj.stage, variant: obj.variant };
+        return { col: c, row: r, kind: obj.kind, mineable: !!obj.mineable, stage: obj.stage, variant: obj.variant };
       }
     }
   }
@@ -224,6 +229,97 @@ export function drawBuilding(b, z, bright) {
   if (bright) ctx.filter = "none";
 }
 
+// Draw a single cell's object (rock/tree) with its shadow, click-pop scale,
+// hover brighten, and - if it is the active cell - the bobbing outline ring
+// wrapping it (back edges behind, front edges in front). Used by the unified
+// entity pass so objects and buildings interleave by depth.
+function drawCellObject(c, r, z, activeCell) {
+  const obj = cellObject(c, r);
+  const isActive = activeCell && activeCell.col === c && activeCell.row === r;
+  if (!obj || !obj.img.complete) {
+    // Active empty/flat cell still needs its ground ring (no object to wrap).
+    if (isActive) { const s = worldToScreen(cellCenter(c, r).x, cellCenter(c, r).y); const d = tileDiamond(s, z); strokeDiamondHalf(d, "back"); strokeDiamondHalf(d, "front"); }
+    return;
+  }
+  const s = worldToScreen(cellCenter(c, r).x, cellCenter(c, r).y);
+  const sc = obj.sc * popFactor(c, r);
+  const diamond = isActive ? tileDiamond(s, z) : null;
+  if (diamond) strokeDiamondHalf(diamond, "back");
+  drawShadow(obj.img, s, z, obj.lift, sc, obj.flip); // cast before the sprite
+  const hl = G.hover && G.hover.col === c && G.hover.row === r;
+  if (hl) ctx.filter = "brightness(1.6)";
+  drawSprite(obj.img, s, z, obj.lift, sc, obj.flip);
+  if (hl) ctx.filter = "none";
+  if (diamond) strokeDiamondHalf(diamond, "front");
+}
+
+// Draw a placed building with its hover/selected ring and (when out of tools)
+// the floating broken-tool icon. Used by the unified entity pass.
+function drawBuildingEntity(bd, z) {
+  const ringed = bd.id === G.hoverBuilding || bd.id === G.selectedBuilding;
+  const ring = ringed ? buildingDiamond(bd.col, bd.row, z) : null;
+  if (ring) strokeDiamondHalf(ring, "back");
+  drawBuilding(bd, z, bd.id === G.hoverBuilding);
+  if (ring) strokeDiamondHalf(ring, "front");
+  // Out of tools -> idle: float the broken-tool icon gently above the hut.
+  // ONLY harvester huts use tools; smelters/crafting buildings have no tool slot
+  // and no targetKind, so hutToolKind/hutToolCount would throw for them - which
+  // (inside this per-entity draw) would abort the whole entity pass mid-paint.
+  if (GD.buildings[bd.type].category === "harvester" && hutToolCount(bd) <= 0) {
+    const icon = G.brokenIcons[hutToolKind(bd)];
+    if (icon && icon.complete && icon.naturalWidth) {
+      const a = buildingAnchor(bd.col, bd.row);
+      const bob = Math.sin(G.animTime * 0.004) * 4;            // gentle up/down glide
+      const iw = icon.naturalWidth * z, ih = icon.naturalHeight * z;
+      const cx = a.x, cy = a.y - (62 * z) - bob;               // float above the roof
+      ctx.globalAlpha = 0.8;                                   // semi-transparent hint
+      ctx.drawImage(icon, cx - iw / 2, cy - ih, iw, ih);
+      ctx.globalAlpha = 1;
+    }
+  }
+  drawSmoke(bd, z);
+}
+
+// Animated chimney smoke above a building (data: GD.buildings[type].smoke).
+// Crossfades through the frames while gently bobbing, drawn at map scale and
+// reduced opacity. The plume is anchored bottom-center on the per-facing stack
+// point - given in image pixels from the building sprite's top-left - so it
+// rises out of the chimney. A per-building phase offset keeps multiple forges
+// from pulsing in unison.
+function drawSmoke(bd, z) {
+  const sdef = GD.buildings[bd.type].smoke;
+  if (!sdef) return;
+  const frames = G.smokeImages[bd.type];
+  if (!frames || !frames.length) return;
+  const anchor = (sdef.anchor && (sdef.anchor[bd.facing] || sdef.anchor.SE));
+  if (!anchor) return;
+  const bimg = buildingSprite(bd);
+  if (!bimg || !bimg.complete) return;
+  const a = buildingAnchor(bd.col, bd.row);
+  const r = spriteRectAt(bimg, a, z, 0, 1);              // building sprite screen rect
+  const stackX = r.tx + anchor[0] * z;                  // chimney point on screen
+  const stackY = r.ty + anchor[1] * z;
+  const off = bd.col * 131 + bd.row * 197;              // desync per building
+  const t = G.animTime + off;
+  const bob = Math.sin(t * (2 * Math.PI) / (sdef.bobMs || 1800)) * (sdef.bobPx || 2) * z;
+  const baseY = stackY + bob;
+  const n = frames.length;
+  const phase = t / (sdef.frameMs || 450);
+  const i = ((Math.floor(phase) % n) + n) % n;
+  const f = phase - Math.floor(phase);                  // 0..1 blend to the next frame
+  const op = (sdef.opacity != null) ? sdef.opacity : 0.75;
+  const unit = z * (sdef.scale || 1);
+  drawSmokeFrame(frames[i], stackX, baseY, unit, op * (1 - f));
+  drawSmokeFrame(frames[(i + 1) % n], stackX, baseY, unit, op * f);
+}
+function drawSmokeFrame(img, cx, baseY, unit, alpha) {
+  if (!img || !img.complete || !img.naturalWidth || alpha <= 0.001) return;
+  const w = img.naturalWidth * unit, h = img.naturalHeight * unit;
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(img, cx - w / 2, baseY - h, w, h);      // bottom-center at (cx, baseY)
+  ctx.globalAlpha = 1;
+}
+
 export function render() {
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
@@ -241,14 +337,15 @@ export function render() {
   } else {
     G.hoverTile = null;
   }
-  // Tool cursor (OS cursor hidden): hatchet over a choppable tree, pickaxe
-  // over a rock. While holding to harvest, lock the tool to the held kind.
+  // Tool cursor (OS cursor hidden): hatchet over a choppable tree, pickaxe over
+  // any mineable (rock/iron/gold vein). While holding to harvest, lock the tool
+  // to the held category ("tree" | "mine").
   if (G.harvesting) {
     G.showHatchet = G.harvestKind === "tree";
-    G.showPickaxe = G.harvestKind === "rock";
+    G.showPickaxe = G.harvestKind === "mine";
   } else {
     G.showHatchet = !!(G.hover && G.hover.kind === "tree" && G.hover.stage >= GD.matureStage);
-    G.showPickaxe = !!(G.hover && G.hover.kind === "rock");
+    G.showPickaxe = !!(G.hover && G.hover.mineable);
   }
   const wantCursor = (G.showHatchet || G.showPickaxe) ? "none" : "default";
   if (canvas.style.cursor !== wantCursor) canvas.style.cursor = wantCursor;
@@ -257,47 +354,39 @@ export function render() {
   const waterFrame = waterFrameIndex(); // same for all water cells this frame
   // The active cell is the hovered tree's cell (if any), else the ground tile.
   const activeCell = G.hover || G.hoverTile;
-  // Index buildings by their front tile (col+1,row+1) so each draws in the
-  // cell loop at its largest-r+c cell for correct painter's-order occlusion.
-  const cols = G.world.cols;
-  const buildingByFront = new Map();
-  for (const bd of G.world.buildings) {
-    const f = buildingFrontTile(bd.col, bd.row);
-    buildingByFront.set(f.row * cols + f.col, bd);
-  }
+  // Pass A - floor: every visible ground tile.
   for (let r = b.r0; r <= b.r1; r++) {
     for (let c = b.c0; c <= b.c1; c++) {
-      const center = cellCenter(c, r);
-      const s = worldToScreen(center.x, center.y);
       const tImg = tileSprite(G.world.tiles[r][c], c, r, waterFrame);
-      if (tImg && tImg.complete) drawSprite(tImg, s, z, 0, 1, false);
-      // Active outline in two halves: back edges behind the object, front
-      // edges in front, so the ring wraps around the object on this cell.
-      const isActive = activeCell && activeCell.col === c && activeCell.row === r;
-      const diamond = isActive ? tileDiamond(s, z) : null;
-      if (diamond) strokeDiamondHalf(diamond, "back");
-      // The cell's object (rock or tree), with the click-pop scale applied.
-      const obj = cellObject(c, r);
-      if (obj && obj.img.complete) {
-        const sc = obj.sc * popFactor(c, r);
-        drawShadow(obj.img, s, z, obj.lift, sc, obj.flip); // cast before the sprite
-        const hl = G.hover && G.hover.col === c && G.hover.row === r;
-        if (hl) ctx.filter = "brightness(1.6)";
-        drawSprite(obj.img, s, z, obj.lift, sc, obj.flip);
-        if (hl) ctx.filter = "none";
-      }
-      if (diamond) strokeDiamondHalf(diamond, "front");
-      // A building whose front tile is this cell: draw it here, wrapped by its
-      // bobbing 2x2 ring when hovered or selected (back edges, sprite, front).
-      const bd = buildingByFront.get(r * cols + c);
-      if (bd) {
-        const ringed = bd.id === G.hoverBuilding || bd.id === G.selectedBuilding;
-        const ring = ringed ? buildingDiamond(bd.col, bd.row, z) : null;
-        if (ring) strokeDiamondHalf(ring, "back");
-        drawBuilding(bd, z, bd.id === G.hoverBuilding);
-        if (ring) strokeDiamondHalf(ring, "front");
+      if (tImg && tImg.complete) {
+        const s = worldToScreen(cellCenter(c, r).x, cellCenter(c, r).y);
+        drawSprite(tImg, s, z, 0, 1, false);
       }
     }
+  }
+
+  // Pass B - entities: ONE depth-sorted list of all objects (rocks/trees) and
+  // buildings, drawn over the floor in back-to-front order. A single sort makes
+  // the 2x2 building "just another entity", so objects and buildings interleave
+  // correctly (a tree in front of a building draws over it; a rock behind it is
+  // covered) with no special-case post-pass. Depth key: 1-tile object uses r+c;
+  // a building uses its FRONT tile (row+1)+(col+1). Ties broken by column so the
+  // east-most of a shared diagonal paints last.
+  const entities = [];
+  for (let r = b.r0; r <= b.r1; r++) {
+    for (let c = b.c0; c <= b.c1; c++) {
+      const obj = cellObject(c, r);
+      const isActive = activeCell && activeCell.col === c && activeCell.row === r;
+      if (obj || isActive) entities.push({ depth: r + c, col: c, c, r, kind: "obj" });
+    }
+  }
+  for (const bd of G.world.buildings) {
+    entities.push({ depth: (bd.row + 1) + (bd.col + 1), col: bd.col + 1, bd, kind: "bld" });
+  }
+  entities.sort((a, e) => (a.depth - e.depth) || (a.col - e.col) || (a.kind === "bld" ? -1 : 1));
+  for (const e of entities) {
+    if (e.kind === "bld") drawBuildingEntity(e.bd, z);
+    else drawCellObject(e.c, e.r, z, activeCell);
   }
 
   // Ground drops (resource pickups) drawn on top of the world, each with a
@@ -368,10 +457,88 @@ export function render() {
     }
   }
 
+  // Dev cell inspector (console: debugoverlay true).
+  if (G.debugOverlay) drawDebugOverlay(z);
+
   // Keep the world-anchored building panel and the placement hint in sync with
   // the current camera/selection (DOM overlays, updated once per rendered frame).
   positionBuildingPanel();
   updateBuildHint();
+}
+
+// --- Dev: live cell inspector overlay --------------------------------
+// Highlights the hovered cell and prints everything known about that tile and
+// any object on it (raw stage/rock/progress/chop, sprite dims, lift, screen
+// coords, draw order key). Toggled with the `debugoverlay` console command.
+function drawDebugOverlay(z) {
+  const cell = G.hoverTile || G.hover;
+  const lines = [];
+  if (!cell) {
+    lines.push("debug overlay ON");
+    lines.push("(hover a tile)");
+  } else {
+    const c = cell.col, r = cell.row;
+    const inB = inBounds(c, r);
+    const tile = inB ? G.world.tiles[r][c] : "(out of bounds)";
+    const stage = inB ? G.world.stage[r][c] : -1;
+    const rock = inB ? G.world.rock[r][c] : -1;
+    const prog = inB ? (G.world.progress[r][c] | 0) : 0;
+    const chop = inB ? (G.world.chop[r][c] | 0) : 0;
+    const center = cellCenter(c, r);
+    const s = worldToScreen(center.x, center.y);
+    const tImg = inB ? tileSprite(tile, c, r, waterFrameIndex()) : null;
+    lines.push("cell  col=" + c + " row=" + r + "  (r+c=" + (c + r) + ")");
+    lines.push("screen  x=" + Math.round(s.x) + " y=" + Math.round(s.y) + "  zoom=" + z.toFixed(2));
+    lines.push("tile  '" + tile + "'" + (tImg ? "  sprite " + (tImg.naturalWidth || "?") + "x" + (tImg.naturalHeight || "?") : "  (no sprite)"));
+    lines.push("raw  stage=" + stage + " rock=" + rock + " progress=" + prog + " chop=" + chop);
+    // The object the renderer would draw here (rock takes precedence).
+    const obj = inB ? cellObject(c, r) : null;
+    if (obj) {
+      const img = obj.img;
+      const matureMark = (obj.kind === "tree") ? (obj.stage >= GD.matureStage ? " MATURE" : "") : "";
+      lines.push("object  " + obj.kind + (obj.kind === "tree" ? " stage=" + obj.stage + matureMark : " variant=" + obj.variant));
+      lines.push("  lift=" + obj.lift + " sc=" + (obj.sc || 1).toFixed(2) + " flip=" + (!!obj.flip));
+      lines.push("  sprite " + (img && img.naturalWidth || "?") + "x" + (img && img.naturalHeight || "?") + (img && img.complete ? "" : " (loading)"));
+      lines.push("  src " + ((img && img.src) ? img.src.split("/").pop() : "(none)"));
+    } else {
+      lines.push("object  none");
+    }
+    // A building whose footprint covers this cell?
+    const bd = inB && G.world.buildings.find((bb) =>
+      buildingCells(bb.col, bb.row).some(([bc, br]) => bc === c && br === r));
+    if (bd) lines.push("building  " + bd.type + " @(" + bd.col + "," + bd.row + ") tools=" + (bd.tools ? bd.tools.count : 0));
+    // Outline the inspected cell in cyan (no bob) so it is unambiguous.
+    const hw = HALF_W * z, hh = HALF_H * z;
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y - hh); ctx.lineTo(s.x + hw, s.y);
+    ctx.lineTo(s.x, s.y + hh); ctx.lineTo(s.x - hw, s.y); ctx.closePath();
+    ctx.lineWidth = 2; ctx.strokeStyle = "rgba(0, 255, 255, 0.95)"; ctx.stroke();
+  }
+  // Text panel, top-left, fixed (screen). Start it BELOW the crafted-tools HUD
+  // (which also floats top-left and can wrap to multiple rows) so they never
+  // overlap. Coords are canvas-relative; the HUD/canvas rects convert for us.
+  const boxX = 8;
+  let boxY = 8;
+  if (craftedHud && craftedHud.childElementCount > 0) {
+    const hud = craftedHud.getBoundingClientRect();
+    const cv = canvas.getBoundingClientRect();
+    boxY = Math.max(8, hud.bottom - cv.top + 8);
+  }
+  ctx.save();
+  ctx.font = "12px Consolas, monospace";
+  const pad = 8, lh = 15;
+  let maxw = 0;
+  for (const t of lines) maxw = Math.max(maxw, ctx.measureText(t).width);
+  const boxW = maxw + pad * 2, boxH = lines.length * lh + pad * 2;
+  ctx.fillStyle = "rgba(6, 10, 20, 0.82)";
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+  ctx.strokeStyle = "rgba(0, 255, 255, 0.6)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(boxX, boxY, boxW, boxH);
+  ctx.fillStyle = "#dce6ff";
+  ctx.textBaseline = "top";
+  for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i], boxX + pad, boxY + pad + i * lh);
+  ctx.restore();
 }
 
 // Filled top-face diamond on a cell anchor (no bob), for ghosts/highlights.

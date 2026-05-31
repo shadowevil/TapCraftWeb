@@ -38,6 +38,7 @@ export const pauseBtn = el("tc-pause");
 export const menuModal = el("tc-menu");
 export const optionsModal = el("tc-options-modal");
 export const audioRowsEl = el("tc-audio-rows");
+export const eventsEl = el("tc-events");
 export const consoleOverlay = el("tc-console-overlay");
 export const consoleLogEl = el("tc-console-log");
 export const consoleInput = el("tc-console-input");
@@ -55,5 +56,6 @@ export const ui = {
   cluster: el("tc-cluster"), clusterVal: el("tc-cluster-val"),
   rockDensity: el("tc-rock-density"), rockDensityVal: el("tc-rock-density-val"),
   rockCluster: el("tc-rock-cluster"), rockClusterVal: el("tc-rock-cluster-val"),
+  mineral: el("tc-mineral"), mineralVal: el("tc-mineral-val"),
   seed: el("tc-seed"),
 };

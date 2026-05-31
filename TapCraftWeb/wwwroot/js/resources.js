@@ -15,7 +15,8 @@ import { playSfx, playBuildingSfx } from "./sound.js";
 import { fxctx } from "./dom.js";
 import { resourceBarEl, resourceIconEl } from "./dom.js";
 import { cellCenter, worldToScreen } from "./iso.js";
-import { updateResourceUI } from "./ui.js";
+import { mineableAt } from "./mineable.js";
+import { updateResourceUI, postEvent } from "./ui.js";
 import { updateCraftedHud } from "./crafting.js";
 
 // --- Resources & harvesting ------------------------------------------
@@ -30,40 +31,97 @@ export function iconScreenPos(kind) {
 }
 
 // --- Tools (durability) ----------------------------------------------
-export function hasTool(toolType) { return G.world.tools[toolType].count > 0; }
-// Spend one swing of durability on the active tool; break it when it hits 0
-// and promote the next one (if any) to a fresh full instance.
-export function useTool(toolType) {
-  const t = G.world.tools[toolType];
-  if (t.count <= 0) return;
+// A "tool stock" is { count, dura } where dura is the active/wearing tool's
+// remaining durability and the other count-1 are full. The player's crafted
+// pool (G.world.tools[type]) and each hut's own stock share this shape.
+// A tool STOCK is a map { <toolId>: {count,dura} } - the player's crafted pool
+// (G.world.tools) and each building's stock share this shape. Tools have a
+// `kind` ("hatchet"/"pickaxe"); objects reference the KIND they need, and the
+// best owned tier (highest sharpness) of that kind is used.
+export function toolKind(toolId) { return GD.tools[toolId] ? (GD.tools[toolId].kind || toolId) : toolId; }
+// A tool's MAX durability: its own `durability` (e.g. iron tools last 2x) or the
+// shared default. One swing always costs 1, so this is also its "hits".
+export function toolDurabilityFor(toolId) {
+  const d = GD.tools[toolId] && GD.tools[toolId].durability;
+  return d || GD.harvest.toolDurability;
+}
+export function hasTool(toolId) { return !!(G.world.tools[toolId] && G.world.tools[toolId].count > 0); }
+// The best (highest-sharpness) owned tool id of a given kind in a stock, or null.
+export function bestToolId(stock, kind) {
+  let best = null, bestSharp = -1;
+  for (const id of Object.keys(GD.tools)) {
+    if ((GD.tools[id].kind || id) !== kind) continue;
+    const s = stock[id];
+    if (s && s.count > 0 && (GD.tools[id].sharpness || 0) > bestSharp) { best = id; bestSharp = GD.tools[id].sharpness || 0; }
+  }
+  return best;
+}
+// Spend one swing of durability on a stock's tool id; break it at 0 and promote
+// the next one (if any) to a fresh full instance.
+export function useToolStock(stock, toolId) {
+  const t = stock[toolId];
+  if (!t || t.count <= 0) return;
   t.dura -= 1;
-  if (t.dura <= 0) { t.count -= 1; t.dura = t.count > 0 ? GD.harvest.toolDurability : 0; }
+  if (t.dura <= 0) { t.count -= 1; t.dura = t.count > 0 ? toolDurabilityFor(toolId) : 0; }
+}
+// Spend one durability on the PLAYER'S crafted tool id (and refresh its HUD).
+export function useTool(toolId) {
+  useToolStock(G.world.tools, toolId);
   updateCraftedHud();
 }
-export function addTool(toolType) {
-  const t = G.world.tools[toolType];
+export function addTool(toolId) {
+  const t = G.world.tools[toolId] || (G.world.tools[toolId] = { count: 0, dura: 0 });
   t.count += 1;
-  if (t.count === 1) t.dura = GD.harvest.toolDurability; // first one becomes the active instance
+  if (t.count === 1) t.dura = toolDurabilityFor(toolId); // first one becomes the active instance
   updateCraftedHud();
 }
 
-// One harvest swing's yield for an object kind, given whether a matching tool
-// was used (pure: no durability side effect - the caller spends it). The tool
-// raises the drop chance and doubles output.
-export function harvestRoll(objKind, tooled) {
+// Drop-chance multiplier from tool sharpness vs object toughness:
+//   gap = toughness - sharpness
+//   gap >= failGap (2+ under) -> 0     (too tough to harvest at all)
+//   gap == 1        (1 under) -> underSharpMult (inefficient)
+//   gap <= 0 (equal/over)     -> 1, or overSharpMult when strictly over
+export function sharpnessMult(sharpness, toughness) {
   const h = GD.harvest;
-  const chance = tooled ? h.toolDropChance : h.baseDropChance;
-  return Math.random() < chance ? (tooled ? h.toolOutput : h.baseOutput) : 0;
+  const gap = (toughness | 0) - (sharpness | 0);
+  if (gap >= (h.failGap || 2)) return 0;
+  if (gap === 1) return h.underSharpMult;
+  if (gap < 0) return h.overSharpMult;
+  return 1;
 }
 
-// Resolve tool use for a swing: manual harvests (opts omitted) use the player's
-// crafted tool if any (spending durability); building swings pass {tooled:false}
-// so they never consume the player's tools.
+// One harvest swing's yield for an object kind (pure: no durability side effect -
+// the caller spends it). `toolId` is the specific tool used (null = bare hands).
+// The chance is scaled by tool sharpness vs object toughness, and is zero when
+// the object is too tough for the tool (2+ toughness gap).
+export function harvestRoll(objKind, toolId, sharpness) {
+  const h = GD.harvest;
+  const toughness = GD.objects[objKind].toughness || 1;
+  const mult = sharpnessMult(toolId ? sharpness : (h.baseSharpness | 0), toughness);
+  if (mult <= 0) return 0; // too tough for this tool/hands
+  if (toolId) {
+    const tool = GD.tools[toolId];
+    return Math.random() < tool.dropChance * mult ? tool.output : 0;
+  }
+  return Math.random() < h.baseDropChance * mult ? h.baseOutput : 0;
+}
+
+// Resolve tool use for a swing against a tool STOCK, picking the best owned tier
+// of the object's needed KIND. Manual harvests use the player pool; building
+// swings pass the hut's own stock. Returns { toolId, sharpness } (toolId null =
+// bare hands). Spends one durability on the chosen tool.
 function resolveTooled(objKind, opts) {
-  const toolType = GD.objects[objKind].tool;
-  const tooled = (opts && opts.tooled !== undefined) ? opts.tooled : hasTool(toolType);
-  if (tooled) useTool(toolType);
-  return tooled;
+  const kind = GD.objects[objKind].tool; // the tool KIND this object needs
+  const stock = (opts && opts.toolStock) ? opts.toolStock : G.world.tools;
+  // opts.tooled:false forces bare hands (unused now, kept for safety).
+  const allowTool = !(opts && opts.tooled === false);
+  const toolId = allowTool ? bestToolId(stock, kind) : null;
+  const sharpness = toolId ? (GD.tools[toolId].sharpness || 0) : (GD.harvest.baseSharpness | 0);
+  if (toolId) {
+    if (opts && opts.toolStock) useToolStock(stock, toolId); // hut stock: no player HUD refresh
+    else useTool(toolId);                                    // player pool: refresh HUD
+  }
+  return { toolId, sharpness };
 }
 
 // Play the hit sound for a harvest swing. Manual swings (no opts.building) go
@@ -91,26 +149,46 @@ export function harvestTree(col, row, opts) {
   const key = cellKey(col, row);
   flushPopDrop(key); // don't lose the pending drops from a still-running pop
   hitSound("hit_wood", opts);
-  const tooled = resolveTooled("tree", opts);
-  const dropCount = harvestRoll("tree", tooled);
-  G.world.chop[row][col] = (G.world.chop[row][col] || 0) + 1;
-  G.pops.set(key, { col, row, t0: G.animTime, drop: GD.objects.tree.drop, dropCount, dropped: false });
-  // Schedule felling on its own timer; fast re-clicks must NOT postpone it.
-  if (G.world.chop[row][col] >= GD.objects.tree.chopClicks && !G.chopResets.has(key)) {
-    G.chopResets.set(key, G.animTime + POP_MS);
+  const { toolId, sharpness } = resolveTooled("tree", opts);
+  const dropCount = harvestRoll("tree", toolId, sharpness);
+  // Felling only progresses on a SUCCESSFUL hit: a swing that yields no wood
+  // still plays the hit/pop, but doesn't count toward chopping the tree down -
+  // you can't fell a tree for nothing.
+  // noDrops (building harvest): the tree still bounces + fells, but spawns no
+  // physical drops - the caller accrues the returned yield into the building.
+  const spawnCount = (opts && opts.noDrops) ? 0 : dropCount;
+  const pop = { col, row, t0: G.animTime, drop: GD.objects.tree.drop, dropCount: spawnCount, dropped: false };
+  if (dropCount > 0) {
+    G.world.chop[row][col] = (G.world.chop[row][col] || 0) + 1;
+    if (G.world.chop[row][col] >= GD.objects.tree.chopClicks && !G.chopResets.has(key)) {
+      G.chopResets.set(key, G.animTime + POP_MS);
+    }
   }
+  G.pops.set(key, pop);
   return dropCount;
 }
 
-// Click a rock: it "pops" and may drop stone (chance per swing). Infinite.
-export function harvestRock(col, row, opts) {
-  if (G.world.rock[row][col] < 0) return 0;
+// Strike a mineable (rock / iron vein / gold vein): it "pops" and may drop its
+// resource (chance scaled by tool sharpness vs the object's toughness). Infinite
+// - never removed. A too-tough strike still pops + clinks but yields nothing.
+export function harvestMineable(col, row, opts) {
+  const m = mineableAt(col, row);
+  if (!m) return 0;
+  const def = GD.objects[m.typeId];
   const key = cellKey(col, row);
   flushPopDrop(key);
-  hitSound("hit_stone", opts);
-  const tooled = resolveTooled("rock", opts);
-  const dropCount = harvestRoll("rock", tooled);
-  G.pops.set(key, { col, row, t0: G.animTime, drop: GD.objects.rock.drop, dropCount, dropped: false });
+  hitSound("hit_stone", opts); // TODO: dedicated "too tough" clink when 0 yield
+  const { toolId, sharpness } = resolveTooled(m.typeId, opts);
+  // Too tough for the tool at all? Tell the player (manual strikes only, so a
+  // mining hut on gold does not spam the event log).
+  if (sharpnessMult(toolId ? sharpness : (GD.harvest.baseSharpness | 0), def.toughness || 1) <= 0
+      && !(opts && opts.building)) {
+    postEvent("Your tool is too weak to mine " + (GD.resources[def.drop] ? GD.resources[def.drop].name : def.drop) + ".");
+  }
+  const dropCount = harvestRoll(m.typeId, toolId, sharpness);
+  // noDrops (building harvest): bounce/sound only, no physical drops.
+  const spawnCount = (opts && opts.noDrops) ? 0 : dropCount;
+  G.pops.set(key, { col, row, t0: G.animTime, drop: def.drop, dropCount: spawnCount, dropped: false });
   return dropCount;
 }
 
@@ -197,12 +275,11 @@ export function renderFx() {
     fxctx.drawImage(img, x - w / 2, y - h / 2, w, h);
   }
 
-  // Tool cursor: pivots at the handle grip (pinned to the mouse) and
-  // oscillates back and forth across TOOL_SWING_DEG. Hatchet for trees,
-  // pickaxe for rocks.
+  // Tool cursor: pivots at the handle grip (pinned to the mouse) and oscillates.
+  // Show the best owned tool of the kind (so an iron tool shows the iron cursor).
   let tool = null, pvx = 0, pvy = 0;
-  if (G.showHatchet) { tool = G.toolImages.hatchet; pvx = HATCHET_PIVOT_X; pvy = HATCHET_PIVOT_Y; }
-  else if (G.showPickaxe) { tool = G.toolImages.pickaxe; pvx = PICKAXE_PIVOT_X; pvy = PICKAXE_PIVOT_Y; }
+  if (G.showHatchet) { tool = G.toolImages[bestToolId(G.world.tools, "hatchet") || "hatchet"]; pvx = HATCHET_PIVOT_X; pvy = HATCHET_PIVOT_Y; }
+  else if (G.showPickaxe) { tool = G.toolImages[bestToolId(G.world.tools, "pickaxe") || "pickaxe"]; pvx = PICKAXE_PIVOT_X; pvy = PICKAXE_PIVOT_Y; }
   if (tool && tool.complete && G.mouse.on) {
     const px = G.mouse.x;                          // canvas coords ->
     const py = G.mouse.y + (TOPBAR_H + SUBBAR_H);  // full-screen coords
@@ -223,7 +300,7 @@ export function renderFx() {
 // Returns the swing's drop count.
 export function doHarvest(obj, opts) {
   if (!obj) return 0;
-  return obj.kind === "rock"
-    ? harvestRock(obj.col, obj.row, opts)
+  return obj.mineable
+    ? harvestMineable(obj.col, obj.row, opts)
     : harvestTree(obj.col, obj.row, opts);
 }

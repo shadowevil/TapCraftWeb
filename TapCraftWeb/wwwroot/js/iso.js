@@ -73,7 +73,7 @@ export function buildingFrontTile(col, row) {
 // front cell center, not spriteRect's +SPRITE/2 slack, so tall art sits flush.)
 export function buildingAnchor(col, row) {
   const fb = cellCenter(col + 1, row + 1);
-  return worldToScreen(fb.x, fb.y + HALF_H);
+  return worldToScreen(fb.x, fb.y + HALF_H * 2); // drop a full tile-diamond height to plant the foot
 }
 // The four OUTER vertices of the 2x2 block's surface diamond (world coords),
 // for the bobbing hover ring. Caller applies worldToScreen + the bob lift.

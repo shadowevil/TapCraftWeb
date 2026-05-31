@@ -7,51 +7,84 @@ import { GD } from "./gamedata.js";
 import { craftPanel, craftListEl, craftedHud } from "./dom.js";
 import { updateResourceUI } from "./ui.js";
 import { addTool } from "./resources.js";
+import { buildingExists } from "./buildings.js";
 
 // Recipe name/icon are not stored on the recipe (deduped): they come from the
 // tool the recipe produces.
 function recipeTool(id) { return GD.tools[GD.crafting.recipes[id].tool]; }
 
 // --- Crafting ---------------------------------------------------------
-export function craftCost(id, amount) {
-  const c = GD.crafting.recipes[id].cost;
-  return { wood: c.wood * amount, stone: c.stone * amount };
+// Costs are arbitrary resource maps ({ wood, stone, iron_ingot, ... }), so the
+// craft flow iterates each recipe's cost object instead of assuming wood/stone.
+
+// A recipe is available to craft if its `requires` building (if any) exists.
+export function recipeAvailable(id) {
+  const req = GD.crafting.recipes[id].requires;
+  return !req || buildingExists(req);
 }
+// True if a stone-tier tool recipe (gets the blacksmith speed bonus).
+function isStoneToolRecipe(id) {
+  const t = GD.tools[GD.crafting.recipes[id].tool];
+  return t && (t.tier || 1) <= 1;
+}
+// Per-unit craft time, reduced for stone tools while a blacksmith exists.
+export function craftMsFor(id) {
+  let ms = GD.crafting.craftMs;
+  if (isStoneToolRecipe(id) && buildingExists("blacksmith")) ms *= (GD.crafting.blacksmithSpeedMult || 1);
+  return ms;
+}
+// Scale a recipe's cost map by `amount`.
+export function craftCost(id, amount) {
+  const c = GD.crafting.recipes[id].cost, out = {};
+  for (const res of Object.keys(c)) out[res] = c[res] * amount;
+  return out;
+}
+// Can the player currently afford `amount` of this recipe (every cost resource)?
 export function canAfford(id, amount) {
   const cost = craftCost(id, amount);
-  return G.world.wood >= cost.wood && G.world.stone >= cost.stone;
+  for (const res of Object.keys(cost)) if ((G.world[res] | 0) < cost[res]) return false;
+  return true;
 }
 // Resources already spoken for by queued-but-not-yet-charged units across all
 // jobs (the currently-crafting unit of each job is already charged/deducted).
 export function reservedCost() {
-  let wood = 0, stone = 0;
+  const r = {};
   if (G.world.craft) {
     for (const id in G.world.craft) {
       const job = G.world.craft[id];
       const uncharged = job.remaining - (job.charged ? 1 : 0);
       const c = GD.crafting.recipes[id].cost;
-      wood += c.wood * uncharged;
-      stone += c.stone * uncharged;
+      for (const res of Object.keys(c)) r[res] = (r[res] || 0) + c[res] * uncharged;
     }
   }
-  return { wood, stone };
+  return r;
 }
-// What can still be committed to NEW queue entries right now.
+// How much of each resource can still be committed to NEW queue entries now.
 export function spendable() {
-  const r = reservedCost();
-  return { wood: G.world.wood - r.wood, stone: G.world.stone - r.stone };
+  const r = reservedCost(), sp = {};
+  for (const res of Object.keys(G.world)) {
+    if (typeof G.world[res] === "number") sp[res] = G.world[res] - (r[res] || 0);
+  }
+  return sp;
+}
+// True if a cost map fits within a spendable map.
+function affordsFrom(sp, cost) {
+  for (const res of Object.keys(cost)) if ((sp[res] || 0) < cost[res]) return false;
+  return true;
 }
 
 // Queue crafting (deferred charge): enqueue up to `amount`, but only as many
 // as currently-uncommitted resources can cover. Nothing is charged here; each
 // unit is paid for when it actually starts crafting (see advanceCrafting).
 export function startCraft(id, amount) {
+  if (!recipeAvailable(id)) return;
   amount = Math.max(1, Math.min(GD.crafting.craftMax, amount | 0));
   const c = GD.crafting.recipes[id].cost;
   const sp = spendable();
   let add = 0;
-  while (add < amount && sp.wood >= c.wood && sp.stone >= c.stone) {
-    sp.wood -= c.wood; sp.stone -= c.stone; add++;
+  while (add < amount && affordsFrom(sp, c)) {
+    for (const res of Object.keys(c)) sp[res] -= c[res];
+    add++;
   }
   if (add <= 0) return;
   const job = G.world.craft[id] || (G.world.craft[id] = { remaining: 0, elapsed: 0, charged: false });
@@ -89,15 +122,16 @@ export function advanceCrafting(dtMs) {
       if (!canAfford(id, 1)) { delete G.world.craft[id]; } // safety net
       else {
         const c = GD.crafting.recipes[id].cost;
-        G.world.wood -= c.wood; G.world.stone -= c.stone;
+        for (const res of Object.keys(c)) G.world[res] -= c[res];
         job.charged = true;
         updateResourceUI();
       }
     }
     if (job.charged) {
       job.elapsed += dtMs;
-      if (job.elapsed >= GD.crafting.craftMs) {
-        job.elapsed -= GD.crafting.craftMs;
+      const ms = craftMsFor(id);
+      if (job.elapsed >= ms) {
+        job.elapsed -= ms;
         job.remaining -= 1;
         job.charged = false;
         addTool(GD.crafting.recipes[id].tool);
@@ -133,9 +167,13 @@ export function buildCraftPanel() {
     slider.className = "tc-craft-slider";
     const cost = document.createElement("div");
     cost.className = "tc-craft-cost";
-    const woodC = costSpan(GD.resources.wood.icon);
-    const stoneC = costSpan(GD.resources.stone.icon);
-    cost.append(woodC.wrap, stoneC.wrap);
+    // One cost span per resource the recipe needs (wood/stone/ingots/...).
+    const costSpans = {};
+    for (const res of Object.keys(GD.crafting.recipes[id].cost)) {
+      const cs = costSpan(GD.resources[res].icon);
+      costSpans[res] = cs.val;
+      cost.append(cs.wrap);
+    }
     mid.append(name, slider, cost);
 
     const button = document.createElement("button");
@@ -146,7 +184,7 @@ export function buildCraftPanel() {
     entry.append(main);
     craftListEl.appendChild(entry);
 
-    G.craftEntries[id] = { slider, costWood: woodC.val, costStone: stoneC.val, button };
+    G.craftEntries[id] = { slider, costSpans, button, entry };
     slider.addEventListener("input", updateCraftPanel);
     button.addEventListener("click", () => startCraft(id, +slider.value));
   }
@@ -204,17 +242,30 @@ export function updateCraftPanel() {
     const amount = +e.slider.value;
     const cost = craftCost(id, amount);
     const unit = GD.crafting.recipes[id].cost;
-    e.costWood.textContent = cost.wood;
-    e.costStone.textContent = cost.stone;
-    // Red when the (uncommitted) resources can't cover the requested batch.
-    e.costWood.classList.toggle("tc-short", sp.wood < cost.wood);
-    e.costStone.classList.toggle("tc-short", sp.stone < cost.stone);
-    e.button.textContent = "Craft x" + amount;
-    // Enabled when at least one more unit can be queued (the rest cap at what
-    // is affordable). Disabled outside an active world.
-    e.button.disabled = !G.hasWorld || sp.wood < unit.wood || sp.stone < unit.stone;
+    const available = recipeAvailable(id);
+    // Per-resource cost values, red when uncommitted resources can't cover them.
+    for (const res of Object.keys(e.costSpans)) {
+      e.costSpans[res].textContent = cost[res];
+      e.costSpans[res].classList.toggle("tc-short", (sp[res] || 0) < cost[res]);
+    }
+    // Locked recipes (need a building) show a hint; otherwise the craft button.
+    e.entry.classList.toggle("tc-recipe-locked", !available);
+    if (!available) {
+      const req = GD.crafting.recipes[id].requires;
+      const reqName = GD.buildings[req] ? GD.buildings[req].name : req;
+      e.button.textContent = "Needs " + reqName;
+      e.button.disabled = true;
+    } else {
+      e.button.textContent = "Craft x" + amount;
+      e.button.disabled = !G.hasWorld || !affordsUnit(sp, unit);
+    }
   }
   updateCraftQueue();
+}
+// True if the spendable map covers one unit's cost.
+function affordsUnit(sp, unit) {
+  for (const res of Object.keys(unit)) if ((sp[res] || 0) < unit[res]) return false;
+  return true;
 }
 
 // Diff the queue rows against world.craft: create/remove on change, update
@@ -229,7 +280,7 @@ export function updateCraftQueue() {
       any = true;
       if (!qi) { qi = createQueueItem(id); G.queueItems[id] = qi; G.craftQueueEl.appendChild(qi.el); }
       qi.count.textContent = "x" + job.remaining;
-      qi.fill.style.width = (job.charged ? Math.min(1, job.elapsed / GD.crafting.craftMs) : 0) * 100 + "%";
+      qi.fill.style.width = (job.charged ? Math.min(1, job.elapsed / craftMsFor(id)) : 0) * 100 + "%";
     } else if (qi) {
       qi.el.remove();
       delete G.queueItems[id];
@@ -248,7 +299,7 @@ export function updateCraftedHud() {
     const item = document.createElement("div");
     item.className = "tc-crafted-item";
     const img = document.createElement("img");
-    img.src = def.icon; img.alt = def.name; img.title = def.name;
+    img.src = def.hudIcon || def.icon; img.alt = def.name; img.title = def.name;
     const count = document.createElement("span");
     count.className = "tc-crafted-count";
     count.textContent = t.count;
@@ -256,7 +307,8 @@ export function updateCraftedHud() {
     dura.className = "tc-crafted-dura";
     const df = document.createElement("div");
     df.className = "tc-crafted-dura-fill";
-    df.style.width = (t.dura / GD.harvest.toolDurability) * 100 + "%";
+    const maxDura = def.durability || GD.harvest.toolDurability; // iron tools last longer
+    df.style.width = (t.dura / maxDura) * 100 + "%";
     dura.appendChild(df);
     item.append(img, count, dura);
     craftedHud.appendChild(item);

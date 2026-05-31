@@ -12,7 +12,7 @@ import {
   playBtn, pauseBtn, menuModal, mainMenuScreen, worldListEl,
   newWorldModal, confirmModal, nameInput, ui,
   buildBtn, buildHint, buildPanel, buildTitlebar, buildCloseBtn, buildListEl, buildingPanel,
-  optionsModal, audioRowsEl,
+  optionsModal, audioRowsEl, eventsEl,
 } from "./dom.js";
 import { fitView, buildingAnchor } from "./iso.js";
 import { generate } from "./worldgen.js";
@@ -24,6 +24,10 @@ import { buildCraftPanel, toggleCraftPanel } from "./crafting.js";
 import {
   findBuilding, demolishBuilding, buildingTargets,
   producedTotal, productionPerMin, canAffordBuilding,
+  storedTotal, receiveResources,
+  hutToolKind, hutToolCount, effectiveMaxTargets, effectiveSpeedMs,
+  hutMovable, poolMovableForHut, depositTool, withdrawTool,
+  forgeOreTypes, forgeFreeOre, depositOre, withdrawOre, depositFuel,
 } from "./buildings.js";
 import {
   playSfx, getAudioSettings, setChannelVolume, setChannelMute,
@@ -184,6 +188,7 @@ export function createWorld() {
     cluster: pct(ui.cluster, "cluster"),
     rockDensity: pct(ui.rockDensity, "rockDensity"),
     rockCluster: pct(ui.rockCluster, "rockCluster"),
+    mineral: pct(ui.mineral, "mineral"),
   };
   G.world.id = newWorldId();
   G.world.name = (nameInput.value || suggestWorldName()).trim() || suggestWorldName();
@@ -206,6 +211,7 @@ export function wireUi() {
   bindSlider(ui.cluster, ui.clusterVal, (v) => `${v}%`);
   bindSlider(ui.rockDensity, ui.rockDensityVal, (v) => `${v}%`);
   bindSlider(ui.rockCluster, ui.rockClusterVal, (v) => `${v}%`);
+  bindSlider(ui.mineral, ui.mineralVal, (v) => `${v}%`);
 
   el("tc-seed-random").addEventListener("click", () => { ui.seed.value = randomSeed(); });
   el("tc-generate").addEventListener("click", createWorld);
@@ -255,6 +261,20 @@ export function wireUi() {
   buildBtn.addEventListener("click", toggleBuildPanel);
   buildCloseBtn.addEventListener("click", () => buildPanel.classList.add("hidden"));
   makeDraggable(buildPanel, buildTitlebar);
+  el("tc-bpanel-receive").addEventListener("click", () => {
+    if (G.selectedBuilding && receiveResources(G.selectedBuilding) > 0) { panelState.stored = -1; saveWorld(); }
+  });
+  // Deposit/Withdraw: the slider sets the requested amount; depositTool/
+  // withdrawTool clamp to each side's movable count. Slider input updates its
+  // live value label; a move re-syncs the slider range next frame.
+  const toolQty = () => { const n = parseInt(el("tc-bpanel-qty").value, 10); return Number.isFinite(n) && n > 0 ? n : 1; };
+  el("tc-bpanel-qty").addEventListener("input", () => { el("tc-bpanel-qty-val").textContent = el("tc-bpanel-qty").value; });
+  el("tc-bpanel-deposit").addEventListener("click", () => {
+    if (G.selectedBuilding && depositTool(G.selectedBuilding, toolQty()) > 0) { panelState.tools = -1; panelState.qtyMax = -1; saveWorld(); }
+  });
+  el("tc-bpanel-withdraw").addEventListener("click", () => {
+    if (G.selectedBuilding && withdrawTool(G.selectedBuilding, toolQty()) > 0) { panelState.tools = -1; panelState.qtyMax = -1; saveWorld(); }
+  });
   el("tc-bpanel-demolish").addEventListener("click", () => {
     if (G.selectedBuilding) { demolishBuilding(G.selectedBuilding); hideBuildingPanel(); saveWorld(); }
   });
@@ -353,10 +373,7 @@ function markAffordability() {
 }
 export function toggleBuildPanel() {
   buildPanel.classList.toggle("hidden");
-  if (!buildPanel.classList.contains("hidden")) {
-    buildBuildPanel();
-    playSfx("door_open", "building"); // a "door opening" cue on the building menu
-  }
+  if (!buildPanel.classList.contains("hidden")) buildBuildPanel();
 }
 
 // --- Options modal: sound channels -----------------------------------
@@ -429,18 +446,48 @@ export function updateBuildHint() {
 // Callbacks used by input.js after a placement/selection happens.
 export function onBuildingPlaced(b) { saveWorld(); }
 export function onBuildingSelected(b) {
-  if (b) showBuildingPanel(b);
+  if (b) { playSfx("door_open", "building"); showBuildingPanel(b); } // "open the door" on a placed building
   else hideBuildingPanel();
 }
 
 // The world-anchored panel: a fixed-position DOM card that tracks the selected
 // building each frame and scales with the map zoom (clamped readable).
-let panelState = { produced: -1, rate: -1, targets: -1, status: "" };
+function freshPanelState() { return { stored: -1, produced: -1, rate: -1, targets: -1, status: "", tools: -1, bonus: "", qtyMax: -1, recv: "" }; }
+let panelState = freshPanelState();
 export function showBuildingPanel(b) {
-  el("tc-bpanel-title").textContent = GD.buildings[b.type].name;
-  panelState = { produced: -1, rate: -1, targets: -1, status: "" };
+  const def = GD.buildings[b.type];
+  el("tc-bpanel-title").textContent = def.name;
+  const cat = def.category;
+  // Title icon: harvester -> what it produces; smelter -> Forge ingot; crafting -> none.
+  if (cat === "harvester") {
+    const resKind = GD.objects[def.targetKind].drop;
+    el("tc-bpanel-icon").src = GD.resources[resKind].icon;
+    el("tc-bpanel-tool-icon").src = GD.tools[hutToolKind(b)].icon;
+    el("tc-bpanel-receive-icon").src = GD.resources[resKind].icon;
+  } else if (cat === "smelter") {
+    el("tc-bpanel-icon").src = def.sprites.SE; // building thumbnail
+    // Forge has its own per-ingot Receive buttons (built in buildForgeRows).
+  } else {
+    el("tc-bpanel-icon").src = def.sprites.SE; // building thumbnail
+  }
+  // Show only the rows for this category.
+  setPanelCategory(cat);
+  // Build the Forge body once per open (deposit rows per ore type).
+  if (cat === "smelter") buildForgeRows(b);
+  panelState = freshPanelState();
   buildingPanel.classList.remove("hidden");
   positionBuildingPanel();
+}
+// Show only the rows whose data-cat token list includes `cat`; hide the rest.
+// Toggles inline display (NOT a class) because there is no .tc-bpanel-row.hidden
+// rule, and so a row tagged with several cats (e.g. the Receive button
+// "harvester smelter") shows for ANY of its listed categories. Rows without a
+// data-cat (Status, title, Demolish) are shared and left untouched.
+function setPanelCategory(cat) {
+  for (const el2 of buildingPanel.querySelectorAll("[data-cat]")) {
+    const cats = (el2.getAttribute("data-cat") || "").split(/\s+/);
+    el2.style.display = cats.indexOf(cat) >= 0 ? "" : "none";
+  }
 }
 export function hideBuildingPanel() {
   buildingPanel.classList.add("hidden");
@@ -453,23 +500,182 @@ export function positionBuildingPanel() {
   if (!b || G.inMenu) { hideBuildingPanel(); return; }
   if (buildingPanel.classList.contains("hidden")) buildingPanel.classList.remove("hidden");
 
-  // Anchor over the building's top: use its plant point then lift by the
-  // sprite height so the card floats above the roof, in full-screen coords.
+  // Anchor over the building's top, scaled with zoom (clamped readable).
   const a = buildingAnchor(b.col, b.row);
-  const x = a.x;
-  const y = a.y + (TOPBAR_H + SUBBAR_H);
   const scale = Math.min(1.6, Math.max(0.8, G.cam.zoom / 2));
-  buildingPanel.style.left = x + "px";
-  buildingPanel.style.top = y + "px";
+  buildingPanel.style.left = a.x + "px";
+  buildingPanel.style.top = (a.y + (TOPBAR_H + SUBBAR_H)) + "px";
   buildingPanel.style.transform = `translate(-50%, calc(-100% - 90px)) scale(${scale})`;
 
-  // Update text only when values change (no per-frame innerHTML churn).
+  const cat = GD.buildings[b.type].category;
+  if (cat === "harvester") refreshHarvesterPanel(b);
+  else if (cat === "smelter") refreshForgePanel(b);
+  // crafting: static body, nothing dynamic.
+}
+
+function refreshHarvesterPanel(b) {
+  const def = GD.buildings[b.type];
+  const tools = hutToolCount(b);
+  const stored = storedTotal(b);
   const produced = producedTotal(b);
   const rate = productionPerMin(b);
   const targets = buildingTargets(b).length;
-  const status = targets > 0 ? "Working" : "Idle - no targets";
+  const speedPct = Math.round((1 - effectiveSpeedMs(b) / def.harvestSpeedMs) * 100);
+  const bonus = effectiveMaxTargets(b) + " / +" + speedPct + "%";
+  const status = tools <= 0 ? "Idle - no tools" : (targets > 0 ? "Working" : "Idle - no targets");
+  const poolMovable = poolMovableForHut(b);
+  const hutMov = hutMovable(b);
+  const qtyMax = Math.max(1, poolMovable, hutMov);
+
+  if (tools !== panelState.tools) {
+    el("tc-bpanel-tools").textContent = tools;
+    el("tc-bpanel-deposit").disabled = poolMovable <= 0;
+    el("tc-bpanel-withdraw").disabled = hutMov <= 0;
+    panelState.tools = tools;
+  }
+  if (qtyMax !== panelState.qtyMax) {
+    const slider = el("tc-bpanel-qty");
+    slider.max = String(qtyMax);
+    if (+slider.value > qtyMax) slider.value = String(qtyMax);
+    el("tc-bpanel-qty-val").textContent = slider.value;
+    panelState.qtyMax = qtyMax;
+  }
+  if (bonus !== panelState.bonus) { el("tc-bpanel-bonus").textContent = bonus; panelState.bonus = bonus; }
+  setReceive(stored);
   if (produced !== panelState.produced) { el("tc-bpanel-produced").textContent = produced; panelState.produced = produced; }
   if (rate !== panelState.rate) { el("tc-bpanel-rate").textContent = rate + " / min"; panelState.rate = rate; }
   if (targets !== panelState.targets) { el("tc-bpanel-targets").textContent = targets; panelState.targets = targets; }
   if (status !== panelState.status) { el("tc-bpanel-status").textContent = status; panelState.status = status; }
+}
+
+function setReceive(stored) {
+  if (stored === panelState.stored) return;
+  const btn = el("tc-bpanel-receive");
+  btn.disabled = stored <= 0;
+  el("tc-bpanel-receive-text").textContent = stored > 0 ? "Receive " + stored : "Receive";
+  panelState.stored = stored;
+}
+
+// --- Forge (smelter) panel body --------------------------------------
+// Built when a forge is selected: an amount-step selector, one deposit/withdraw
+// row per ore type, a fuel deposit row, and one Receive button per output ingot.
+// The step picks how much each +/- moves (1/10/100, or All = everything available
+// for that action); each deposit/withdraw clamps to what's actually on hand.
+let forgeRefs = null;
+let forgeStepMode = 10;                       // 1 | 10 | 100 | "all"; persists across opens
+const FORGE_STEPS = [1, 10, 100, "all"];
+function buildForgeRows(b) {
+  const host = el("tc-forge-rows");
+  host.innerHTML = "";
+  forgeRefs = { id: b.id, ore: {}, fuel: null, recv: {} };
+  const def = GD.buildings[b.type];
+  const fuelRes = def.fuelResource;
+
+  // Step selector: how much each +/- button moves.
+  const steps = document.createElement("div");
+  steps.className = "tc-forge-steps";
+  const chips = [];
+  for (const s of FORGE_STEPS) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "tc-forge-step" + (s === forgeStepMode ? " active" : "");
+    chip.textContent = s === "all" ? "All" : "+" + s;
+    chip.addEventListener("click", () => {
+      forgeStepMode = s;
+      for (const c of chips) c.classList.toggle("active", c === chip);
+    });
+    chips.push(chip);
+    steps.appendChild(chip);
+  }
+  host.appendChild(steps);
+
+  // One deposit/withdraw row per smeltable ore.
+  for (const res of forgeOreTypes(b)) {
+    const row = document.createElement("div");
+    row.className = "tc-bpanel-row tc-forge-row";
+    const label = document.createElement("span");
+    label.className = "tc-bpanel-label";
+    label.innerHTML = `<img class="tc-bpanel-inline-icon" src="${GD.resources[res].icon}" /> ${GD.resources[res].name}`;
+    const val = document.createElement("span"); val.className = "tc-bpanel-val";
+    const wd = document.createElement("button"); wd.type = "button"; wd.className = "tc-btn tc-forge-mini"; wd.textContent = "-";
+    const dep = document.createElement("button"); dep.type = "button"; dep.className = "tc-btn tc-forge-mini"; dep.textContent = "+";
+    dep.addEventListener("click", () => {
+      const amt = forgeStepMode === "all" ? (G.world[res] | 0) : forgeStepMode;
+      if (depositOre(b.id, res, amt) > 0) saveWorld();
+    });
+    wd.addEventListener("click", () => {
+      const amt = forgeStepMode === "all" ? forgeFreeOre(b, res) : forgeStepMode;
+      if (withdrawOre(b.id, res, amt) > 0) saveWorld();
+    });
+    const ctrls = document.createElement("span"); ctrls.className = "tc-forge-ctrls"; ctrls.append(val, wd, dep);
+    row.append(label, ctrls);
+    host.appendChild(row);
+    forgeRefs.ore[res] = val;
+  }
+
+  // Fuel row (deposit only - burned fuel can't be withdrawn).
+  const frow = document.createElement("div");
+  frow.className = "tc-bpanel-row tc-forge-row";
+  const fl = document.createElement("span"); fl.className = "tc-bpanel-label";
+  fl.innerHTML = `<img class="tc-bpanel-inline-icon" src="${GD.resources[fuelRes].icon}" /> Fuel`;
+  const fv = document.createElement("span"); fv.className = "tc-bpanel-val";
+  const fdep = document.createElement("button"); fdep.type = "button"; fdep.className = "tc-btn tc-forge-mini"; fdep.textContent = "+";
+  fdep.addEventListener("click", () => {
+    const amt = forgeStepMode === "all" ? (G.world[fuelRes] | 0) : forgeStepMode;
+    if (depositFuel(b.id, amt) > 0) saveWorld();
+  });
+  const fctrls = document.createElement("span"); fctrls.className = "tc-forge-ctrls"; fctrls.append(fv, fdep);
+  frow.append(fl, fctrls);
+  host.appendChild(frow);
+  forgeRefs.fuel = fv;
+
+  // One Receive button per distinct output ingot (collects just that ingot).
+  const outs = [];
+  for (const ore of forgeOreTypes(b)) { const ing = GD.resources[ore].smeltTo; if (ing && outs.indexOf(ing) < 0) outs.push(ing); }
+  for (const ing of outs) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "tc-btn tc-primary tc-forge-receive";
+    const img = document.createElement("img"); img.className = "tc-bpanel-inline-icon"; img.src = GD.resources[ing].icon;
+    const txt = document.createElement("span");
+    btn.append(img, txt);
+    btn.addEventListener("click", () => { if (receiveResources(b.id, ing) > 0) { saveWorld(); } });
+    host.appendChild(btn);
+    forgeRefs.recv[ing] = { btn, txt };
+  }
+}
+function refreshForgePanel(b) {
+  if (!forgeRefs || forgeRefs.id !== b.id) buildForgeRows(b);
+  for (const res of Object.keys(forgeRefs.ore)) forgeRefs.ore[res].textContent = b.oreStored[res] | 0;
+  forgeRefs.fuel.textContent = Math.floor(b.fuel);
+  for (const ing of Object.keys(forgeRefs.recv)) {
+    const n = b.ingots[ing] | 0;
+    const r = forgeRefs.recv[ing];
+    r.txt.textContent = n > 0 ? `Receive ${GD.resources[ing].name} (${n})` : `Receive ${GD.resources[ing].name}`;
+    r.btn.disabled = n <= 0;
+  }
+  const busy = !!b.smelt;
+  const status = busy ? "Smelting" : (anyOre(b) ? (b.fuel > 0 ? "Smelting" : "Idle - no fuel") : "Idle - no ore");
+  if (status !== panelState.status) { el("tc-bpanel-status").textContent = status; panelState.status = status; }
+}
+function anyOre(b) { for (const res of forgeOreTypes(b)) if ((b.oreStored[res] | 0) > 0) return true; return false; }
+
+// --- Event messages --------------------------------------------------
+// A transient toast stack above the craft/build buttons. Identical consecutive
+// messages are de-duped within a short window so holding the mouse on a
+// too-tough vein does not spam. Each line fades out via CSS then is removed.
+let lastEventText = "", lastEventAt = -100000;
+export function postEvent(text) {
+  if (!eventsEl) return;
+  // Throttle repeats of the same message (G.animTime is ms).
+  if (text === lastEventText && (G.animTime - lastEventAt) < 1500) return;
+  lastEventText = text; lastEventAt = G.animTime;
+  const line = document.createElement("div");
+  line.className = "tc-event";
+  line.textContent = text;
+  eventsEl.appendChild(line);
+  // Cap visible lines.
+  while (eventsEl.childElementCount > 4) eventsEl.removeChild(eventsEl.firstChild);
+  setTimeout(() => { line.classList.add("tc-event-out"); }, 2600);
+  setTimeout(() => { if (line.parentElement) line.parentElement.removeChild(line); }, 3200);
 }

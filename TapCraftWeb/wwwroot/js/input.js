@@ -55,7 +55,9 @@ canvas.addEventListener("pointerdown", (e) => {
   const obj = G.running ? objectAt(p.x, p.y) : null;
   if (obj) {
     G.harvesting = true;
-    G.harvestKind = obj.kind;
+    // Lock the hold to a CATEGORY ("tree" | "mine") so a drag keeps harvesting
+    // the same family (any vein/rock counts as "mine").
+    G.harvestKind = obj.mineable ? "mine" : "tree";
     doHarvest(obj);              // first harvest is immediate
     G.lastHarvestAt = G.animTime;
   } else {

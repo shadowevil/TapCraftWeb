@@ -19,9 +19,15 @@ export const G = {
     stage: [],     // [r][c] -1 none, 0..MATURE  (trees)
     progress: [],  // [r][c] growth toward next stage
     chop: [],      // [r][c] clicks landed on a mature tree
-    rock: [],      // [r][c] -1 none, else rock variant index (stone, infinite)
+    rock: [],      // [r][c] -1 none, else encoded mineable = typeIndex*100+variant
+                   //   (typeIndex 0=stone rock, 1=iron vein, 2=gold vein - see
+                   //   MINEABLE_TYPES in mineable.js; stone=0 keeps old saves valid)
     wood: 0,       // collected wood
     stone: 0,      // collected stone
+    iron: 0,       // collected iron ore
+    gold: 0,       // collected gold ore
+    iron_ingot: 0, // smelted iron ingots
+    gold_ingot: 0, // smelted gold ingots
     tools: null,   // { hatchet:{count,dura}, pickaxe:{count,dura} } (dura = active instance)
     craft: null,   // { <craftableId>: { remaining, elapsed } } in-progress batches
     buildings: [], // [{ id, type, col, row, facing, produced:{<res>:n} }] placed buildings
@@ -34,7 +40,9 @@ export const G = {
   resImages: {},          // resource id -> pickup icon Image (wood, stone, ...)
   toolImages: {},         // tool id -> cursor sprite Image (hatchet, pickaxe, ...)
   buildingImages: {},     // building id -> { SE: Image, SW: Image }
-  rockImages: [],         // map rock sprites (variants)
+  smokeImages: {},        // building id -> [frame Images] (animated effect, e.g. forge smoke)
+  brokenIcons: {},        // tool id -> broken-tool Image (floats over an idle hut)
+  oreImages: {},          // mineable typeId -> [variant Images] (rock/iron_vein/gold_vein)
 
   cam: { x: 0, y: 0, zoom: 2 },
   running: false,
@@ -62,6 +70,7 @@ export const G = {
   consoleOpen: false,         // true while the dev console overlay is open
   consoleLog: [],             // [{ text, error }] output lines (oldest first)
   consoleHistory: [],         // entered command strings, for up/down recall
+  debugOverlay: false,        // dev: draw a live info overlay for the hovered cell
 
   // --- Audio (see sound.js; built lazily on first user gesture) --------
   audio: {

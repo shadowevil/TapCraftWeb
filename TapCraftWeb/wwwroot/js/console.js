@@ -49,6 +49,16 @@ register("addtool", "addtool <hatchet|pickaxe> [amount=1]", (args) => {
   return "Added " + n + " " + GD.tools[type].name + " (count " + G.world.tools[type].count + ").";
 });
 
+// Toggle the live cell-inspector overlay (drawn in render.js).
+register("debugoverlay", "debugoverlay <true|false>", (args) => {
+  const a = (args[0] || "").toLowerCase();
+  if (a === "true" || a === "on" || a === "1") G.debugOverlay = true;
+  else if (a === "false" || a === "off" || a === "0") G.debugOverlay = false;
+  else if (a === "") G.debugOverlay = !G.debugOverlay; // bare toggle
+  else return { text: "Usage: debugoverlay <true|false>", error: true };
+  return "Debug overlay " + (G.debugOverlay ? "ON" : "OFF") + ". Hover a tile to inspect it.";
+});
+
 register("help", "help", () => {
   const lines = [...COMMANDS.values()].map((c) => "  " + c.usage);
   return "Commands:\n" + lines.join("\n");

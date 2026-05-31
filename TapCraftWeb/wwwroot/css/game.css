@@ -1,3 +1,12 @@
+/* border-box so width:100% controls (inputs, sliders, buttons) include their
+   own padding+border and never spill past their panel. Canvas sizing uses the
+   width/height attributes, not the CSS box model, so it is unaffected. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 :root {
   --tc-bar: #141d31;
   --tc-panel: #18223a;
@@ -293,6 +302,9 @@ body.tc-menu-mode .tc-playback {
   flex-direction: column;
   gap: 8px;
   margin-bottom: 14px;
+  max-height: 44vh;        /* scroll within the card when many worlds exist */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* Each saved world is a single combined control: a play part + a red X. */
@@ -376,6 +388,18 @@ body.tc-menu-mode .tc-playback {
 /* Form rows ---------------------------------------------------------- */
 .tc-row {
   margin-bottom: 14px;
+  min-width: 0;            /* allow inner controls to shrink, never overflow */
+}
+
+/* Keyboard focus ring on interactive controls (accessibility). */
+.tc-btn:focus-visible,
+.tc-text:focus-visible,
+.tc-range:focus-visible,
+.tc-seed-row input:focus-visible,
+.tc-panel-close:focus-visible,
+.tc-bpanel-qty:focus-visible {
+  outline: 2px solid var(--tc-accent);
+  outline-offset: 1px;
 }
 
 .tc-row-head {
@@ -951,6 +975,99 @@ body.tc-menu-mode #tc-build-btn {
   cursor: pointer;
 }
 
+/* Event message toasts (above the craft/build buttons) -------------- */
+.tc-events {
+  position: fixed;
+  left: 12px;
+  bottom: 52px;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+  max-width: 40vw;
+}
+
+body.tc-menu-mode .tc-events { display: none; }
+
+.tc-event {
+  padding: 6px 12px;
+  font: 600 13px "Segoe UI", Tahoma, sans-serif;
+  color: var(--tc-fg);
+  background: rgba(20, 29, 49, 0.92);
+  border: 1px solid var(--tc-accent);
+  border-radius: 8px;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.5s ease, transform 0.5s ease;
+}
+
+.tc-event.tc-event-out {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+/* Forge panel rows + Blacksmith note -------------------------------- */
+.tc-forge-ctrls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tc-forge-mini {
+  padding: 2px 6px;
+  font-size: 11px;
+  min-width: 0;
+}
+
+/* Forge deposit amount selector (1 / 10 / 100 / All). */
+.tc-forge-steps {
+  display: flex;
+  gap: 4px;
+  margin: 2px 0 8px;
+}
+
+.tc-forge-step {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 0;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--tc-muted);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--tc-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.tc-forge-step.active {
+  color: var(--tc-fg);
+  background: var(--tc-accent-2);
+  border-color: var(--tc-accent);
+}
+
+/* Per-ingot Receive buttons in the Forge body (stacked). */
+.tc-forge-receive {
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.tc-bpanel-note {
+  font-size: 12px;
+  color: var(--tc-muted);
+  line-height: 1.4;
+}
+
+.tc-recipe-locked {
+  opacity: 0.7;
+}
+
 /* World-anchored building info panel --------------------------------- */
 .tc-bpanel {
   position: fixed;
@@ -971,8 +1088,24 @@ body.tc-menu-mode #tc-build-btn {
   display: none;
 }
 
-.tc-bpanel-title {
+/* Title row: OS-window-style icon + title. */
+.tc-bpanel-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   margin-bottom: 8px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--tc-border);
+}
+
+.tc-bpanel-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  image-rendering: pixelated;
+}
+
+.tc-bpanel-title {
   font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.5px;
@@ -981,7 +1114,8 @@ body.tc-menu-mode #tc-build-btn {
 .tc-bpanel-row {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 4px;
   font-size: 13px;
 }
@@ -995,9 +1129,70 @@ body.tc-menu-mode #tc-build-btn {
   color: var(--tc-fg);
 }
 
-.tc-bpanel-demolish {
+/* Inline icon used in the Tools value and the Receive button. */
+.tc-bpanel-inline-icon {
+  width: 16px;
+  height: 16px;
+  image-rendering: pixelated;
+  vertical-align: middle;
+}
+
+.tc-bpanel-tools-val {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* Deposit/withdraw amount slider + its live value. */
+.tc-bpanel-qty-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 6px;
+  min-width: 0;
+}
+
+.tc-bpanel-qty {
+  flex: 1;
+  min-width: 0;
+}
+
+.tc-bpanel-qty-val {
+  flex-shrink: 0;
+  width: 22px;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--tc-accent);
+}
+
+.tc-bpanel-tools-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.tc-bpanel-tbtn {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 4px;
+  font-size: 12px;
+}
+
+.tc-bpanel-receive {
   width: 100%;
   margin-top: 8px;
+  padding: 7px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.tc-bpanel-demolish {
+  width: 100%;
+  margin-top: 6px;
   padding: 7px;
   font-size: 13px;
 }
