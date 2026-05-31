@@ -265,7 +265,7 @@ export function renderFx() {
   for (const d of G.drops) {
     if (d.phase !== "fly") continue;
     const img = dropImage(d.kind);
-    if (!img || !img.complete) continue;
+    if (!img || !img.complete || !img.naturalWidth) continue;
     const icon = iconPos(d.kind);
     let fp = (G.animTime - d.flyT0) / FLY_MS;
     if (fp > 1) fp = 1;
@@ -283,7 +283,7 @@ export function renderFx() {
   let tool = null, pvx = 0, pvy = 0;
   if (G.showHatchet) { tool = G.toolImages[bestToolId(G.world.tools, "hatchet") || "hatchet"]; pvx = HATCHET_PIVOT_X; pvy = HATCHET_PIVOT_Y; }
   else if (G.showPickaxe) { tool = G.toolImages[bestToolId(G.world.tools, "pickaxe") || "pickaxe"]; pvx = PICKAXE_PIVOT_X; pvy = PICKAXE_PIVOT_Y; }
-  if (tool && tool.complete && G.mouse.on) {
+  if (tool && tool.complete && tool.naturalWidth && G.mouse.on) {
     const px = G.mouse.x;                          // canvas coords ->
     const py = G.mouse.y + (TOPBAR_H + SUBBAR_H);  // full-screen coords
     const w = (tool.naturalWidth || 32) * TOOL_SCALE;

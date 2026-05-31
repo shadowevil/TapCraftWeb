@@ -88,7 +88,7 @@ export function objectAt(px, py) {
     for (let c = c1; c >= c0; c--) {
       if (!inBounds(c, r)) continue;
       const obj = cellObject(c, r);
-      if (!obj || !obj.img.complete) continue;
+      if (!obj || !obj.img.complete || !obj.img.naturalWidth) continue;
       const t = GD.objects[obj.kind];
       if (!t || !t.targetable) continue;
       const img = obj.img;
@@ -124,7 +124,7 @@ export function buildingAt(px, py) {
     .sort((a, b) => b.depth - a.depth); // front-most first
   for (const { b } of order) {
     const img = buildingSprite(b);
-    if (!img || !img.complete) continue;
+    if (!img || !img.complete || !img.naturalWidth) continue;
     const w = img.naturalWidth || SPRITE, h = img.naturalHeight || SPRITE;
     const a = buildingAnchor(b.col, b.row);
     const dw = w * z, dh = h * z;
@@ -243,7 +243,7 @@ export function buildingSprite(b) {
 // footprint's front-bottom vertex. `bright` lifts brightness for hover.
 export function drawBuilding(b, z, bright) {
   const img = buildingSprite(b);
-  if (!img || !img.complete) return;
+  if (!img || !img.complete || !img.naturalWidth) return; // naturalWidth 0 = broken/404
   const a = buildingAnchor(b.col, b.row);
   const r = spriteRectAt(img, a, z, 0, 1);
   if (z >= SHADOW_MIN_ZOOM) drawShadowRect(img, a.x, r, z, false);
@@ -258,7 +258,7 @@ export function drawBuilding(b, z, bright) {
 // entity pass so objects and buildings interleave by depth.
 function drawCellObject(c, r, z, activeCell, obj) {
   const isActive = activeCell && activeCell.col === c && activeCell.row === r;
-  if (!obj || !obj.img.complete) {
+  if (!obj || !obj.img.complete || !obj.img.naturalWidth) {
     // Active empty/flat cell still needs its ground ring (no object to wrap).
     if (isActive) { const s = worldToScreen(cellCenter(c, r).x, cellCenter(c, r).y); const d = tileDiamond(s, z); strokeDiamondHalf(d, "back"); strokeDiamondHalf(d, "front"); }
     return;
@@ -316,7 +316,7 @@ function drawSmoke(bd, z) {
   const anchor = (sdef.anchor && (sdef.anchor[bd.facing] || sdef.anchor.SE));
   if (!anchor) return;
   const bimg = buildingSprite(bd);
-  if (!bimg || !bimg.complete) return;
+  if (!bimg || !bimg.complete || !bimg.naturalWidth) return;
   const a = buildingAnchor(bd.col, bd.row);
   const r = spriteRectAt(bimg, a, z, 0, 1);              // building sprite screen rect
   const stackX = r.tx + anchor[0] * z;                  // chimney point on screen
@@ -366,7 +366,7 @@ function renderFloor(b, z, waterFrame) {
   for (let r = b.r0; r <= b.r1; r++) {
     for (let c = b.c0; c <= b.c1; c++) {
       const tImg = tileSprite(tileAt(c, r), c, r, waterFrame);
-      if (!tImg || !tImg.complete) continue;
+      if (!tImg || !tImg.complete || !tImg.naturalWidth) continue; // skip broken/404 tiles
       const sx = (c - r) * HALF_W * z + cx, sy = (c + r) * HALF_H * z + cy;
       const dw = (tImg.naturalWidth || SPRITE) * z, dh = (tImg.naturalHeight || SPRITE) * z;
       floorCtx.drawImage(tImg, sx - dw / 2, sy + half - dh, dw, dh);
@@ -460,7 +460,7 @@ export function render() {
   for (const d of G.drops) {
     if (d.phase === "fly") continue;
     const img = dropImage(d.kind);
-    if (!img || !img.complete) continue;
+    if (!img || !img.complete || !img.naturalWidth) continue;
     const lw = (img.naturalWidth || 32) * z * DROP_SCALE;
     const lh = (img.naturalHeight || 23) * z * DROP_SCALE;
     const sp = dropScreen(d);
@@ -514,7 +514,7 @@ export function render() {
     // Ghost sprite preview on top, faded.
     const gimg = G.buildingImages[G.buildMode.type] &&
       (G.buildingImages[G.buildMode.type][G.buildMode.facing] || G.buildingImages[G.buildMode.type].SE);
-    if (gimg && gimg.complete) {
+    if (gimg && gimg.complete && gimg.naturalWidth) {
       const a = buildingAnchor(col, row);
       const r = spriteRectAt(gimg, a, z, 0, 1);
       ctx.globalAlpha = 0.6;
