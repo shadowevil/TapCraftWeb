@@ -157,7 +157,7 @@ export function loadImages() {
     for (let f = 1; f <= GD.water.frames; f++) {
       const img = new Image();
       arr.push(img);
-      pending.push(new Promise((res) => { img.onload = res; img.onerror = res; img.src = `/assets/tiles/${waterBases[key]}_${f}.png`; }));
+      pending.push(new Promise((res) => { img.onload = res; img.onerror = res; img.src = `assets/tiles/${waterBases[key]}_${f}.png`; }));
     }
   }
   GD.objects.tree.stageSprites.forEach((src, i) => queue(G.stageImages, i, src));
