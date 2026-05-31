@@ -6,7 +6,7 @@
 import { PARALLAX } from "./config.js";
 import { G } from "./state.js";
 import { canvas } from "./dom.js";
-import { screenToWorld, worldToCell } from "./iso.js";
+import { screenToWorld, worldToCell, minZoom } from "./iso.js";
 import { objectAt, buildingAt } from "./render.js";
 import { doHarvest } from "./resources.js";
 import { placeBuilding } from "./buildings.js";
@@ -93,7 +93,7 @@ canvas.addEventListener("wheel", (e) => {
   const p = pointerPos(e);
   const before = screenToWorld(p.x, p.y);
   const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-  G.cam.zoom = Math.min(6, Math.max(0.1, G.cam.zoom * factor));
+  G.cam.zoom = Math.min(6, Math.max(minZoom(), G.cam.zoom * factor));
   G.cam.x = p.x - before.x * G.cam.zoom;
   G.cam.y = p.y - before.y * G.cam.zoom;
 }, { passive: false });

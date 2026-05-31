@@ -50,5 +50,6 @@ export function makeLayer(cols, rows, fill) {
   return m;
 }
 export function inBounds(col, row) {
+  if (G.world.infinite) return true; // unbounded: every coordinate is a valid cell
   return col >= 0 && row >= 0 && col < G.world.cols && row < G.world.rows;
 }

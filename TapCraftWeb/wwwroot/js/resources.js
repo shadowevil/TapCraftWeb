@@ -16,11 +16,13 @@ import { fxctx } from "./dom.js";
 import { resourceBarEl, resourceIconEl } from "./dom.js";
 import { cellCenter, worldToScreen } from "./iso.js";
 import { mineableAt } from "./mineable.js";
+import { stageAt, chopAt, setChop } from "./cells.js";
 import { updateResourceUI, postEvent } from "./ui.js";
 import { updateCraftedHud } from "./crafting.js";
 
 // --- Resources & harvesting ------------------------------------------
-export function cellKey(c, r) { return r * G.world.cols + c; }
+// Coordinate string so it works unbounded / with negative coords (infinite worlds).
+export function cellKey(c, r) { return c + "," + r; }
 
 // Per-resource-kind helpers, driven by the resource registry (wood, stone, ...).
 export function dropImage(kind) { return G.resImages[kind]; }
@@ -145,7 +147,7 @@ export function flushPopDrop(key) {
 // Click a tree: it "pops" every swing. Mature trees may drop wood (chance per
 // swing) and count toward felling; after CHOP_CLICKS it reverts to a sprout.
 export function harvestTree(col, row, opts) {
-  if (G.world.stage[row][col] < GD.matureStage) return 0; // only fully-grown trees react
+  if (stageAt(col, row) < GD.matureStage) return 0; // only fully-grown trees react
   const key = cellKey(col, row);
   flushPopDrop(key); // don't lose the pending drops from a still-running pop
   hitSound("hit_wood", opts);
@@ -159,8 +161,9 @@ export function harvestTree(col, row, opts) {
   const spawnCount = (opts && opts.noDrops) ? 0 : dropCount;
   const pop = { col, row, t0: G.animTime, drop: GD.objects.tree.drop, dropCount: spawnCount, dropped: false };
   if (dropCount > 0) {
-    G.world.chop[row][col] = (G.world.chop[row][col] || 0) + 1;
-    if (G.world.chop[row][col] >= GD.objects.tree.chopClicks && !G.chopResets.has(key)) {
+    const nc = (chopAt(col, row) || 0) + 1;
+    setChop(col, row, nc);
+    if (nc >= GD.objects.tree.chopClicks && !G.chopResets.has(key)) {
       G.chopResets.set(key, G.animTime + POP_MS);
     }
   }

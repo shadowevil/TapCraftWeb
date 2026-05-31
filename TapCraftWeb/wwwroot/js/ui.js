@@ -14,7 +14,7 @@ import {
   buildBtn, buildHint, buildPanel, buildTitlebar, buildCloseBtn, buildListEl, buildingPanel,
   optionsModal, audioRowsEl, eventsEl,
 } from "./dom.js";
-import { fitView, buildingAnchor } from "./iso.js";
+import { fitView, buildingAnchor, centerCameraOn, minZoom } from "./iso.js";
 import { generate } from "./worldgen.js";
 import {
   readWorldsIndex, saveWorld, loadWorld, deleteWorld, newWorldId,
@@ -76,7 +76,19 @@ export function startGame() {
   document.body.classList.remove("tc-menu-mode");
   hideOverlays();
   resizeCanvas();
-  fitView();
+  // Camera: a freshly loaded world restored its saved view; an infinite or large
+  // world centers on its spawn (fitting the whole world is meaningless); small
+  // finite worlds fit-to-view as before.
+  if (G.camRestored) {
+    G.camRestored = false;
+    // A camera saved before the zoom cap (or on a larger screen) may be zoomed out
+    // past what renders smoothly here - pull it back to the current min zoom.
+    if (G.cam.zoom < minZoom()) centerCameraOn(G.world.spawn || { c: 0, r: 0 }, minZoom());
+  } else if (G.world.infinite || G.world.cols > (GD.worldgen.islandMaxSize || 128)) {
+    centerCameraOn(G.world.spawn || { c: 0, r: 0 }, 2);
+  } else {
+    fitView();
+  }
   updatePlayPause();
 }
 
@@ -144,7 +156,8 @@ export function renderWorldList() {
     ico.className = "tc-play-ico";
     const label = document.createElement("span");
     label.className = "tc-world-name";
-    label.textContent = w.size ? `${w.name}  -  ${w.size}x${w.size}` : w.name;
+    const sizeLabel = w.size === 0 ? "Infinite" : (w.size ? `${w.size}x${w.size}` : "");
+    label.textContent = sizeLabel ? `${w.name}  -  ${sizeLabel}` : w.name;
     play.append(ico, label);
     play.addEventListener("click", () => { if (loadWorld(w.id)) startGame(); });
 
@@ -178,10 +191,12 @@ export function createWorld() {
   // Clamp each slider to its data-defined [min,max]/default. Percentage sliders
   // are authored 0..100 and scaled to 0..1 fractions; growth is a raw float.
   const pct = (s, key) => clampInt(s.value, sl[key].min, sl[key].max, sl[key].default) / 100;
-  const size = clampInt(ui.size.value, sl.size.min, sl.size.max, sl.size.default);
+  const infinite = !!(ui.infinite && ui.infinite.checked);
+  const size = infinite ? 0 : clampInt(ui.size.value, sl.size.min, sl.size.max, sl.size.default);
   let seed = parseInt(ui.seed.value, 10);
   if (!Number.isFinite(seed)) { seed = randomSeed(); ui.seed.value = seed; }
   const settings = {
+    infinite,
     landFraction: pct(ui.land, "land"),
     growthRate: Math.min(sl.growth.max, Math.max(sl.growth.min, Number(ui.growth.value) || sl.growth.default)),
     forestDensity: pct(ui.density, "density"),
@@ -204,6 +219,18 @@ export function bindSlider(input, valEl, fmt) {
 }
 
 export function wireUi() {
+  // The size slider's bounds come from the content pack (single source of truth),
+  // not the hardcoded HTML attributes - so raising the cap is a data change.
+  ui.size.min = String(GD.sliders.size.min);
+  ui.size.max = String(GD.sliders.size.max);
+  ui.size.step = String(GD.sliders.size.step || 1);
+  // Infinite worlds ignore the size slider - grey the row out when checked.
+  if (ui.infinite) {
+    const sizeRow = el("tc-size-row");
+    const sync = () => { if (sizeRow) sizeRow.classList.toggle("tc-disabled", ui.infinite.checked); };
+    ui.infinite.addEventListener("change", sync);
+    sync();
+  }
   bindSlider(ui.size, ui.sizeVal, (v) => `${v}x${v}`);
   bindSlider(ui.land, ui.landVal, (v) => `${v}% land`);
   bindSlider(ui.growth, ui.growthVal, (v) => `${Number(v).toFixed(1)}x`);

@@ -6,11 +6,12 @@ import { G } from "./state.js";
 import { GD } from "./gamedata.js";
 import { hash01, inBounds } from "./rng.js";
 import { MINEABLE_TYPES } from "./mineable.js";
+import { tileAt } from "./cells.js";
 
 // --- Water autotiling -------------------------------------------------
 export function isLand(col, row) {
   if (!inBounds(col, row)) return false;
-  return G.world.tiles[row][col] !== "water";
+  return tileAt(col, row) !== "water";
 }
 // Indexed by the 4-bit land mask (ne=1, se=2, sw=4, nw=8): single edges, the
 // four two-edge corners, and "o" for any other multi-land combo. null = open.

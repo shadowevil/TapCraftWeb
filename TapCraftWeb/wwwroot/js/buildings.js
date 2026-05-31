@@ -13,6 +13,7 @@ import { buildingCells } from "./iso.js";
 import { inBounds } from "./rng.js";
 import { cellObject } from "./render.js";
 import { mineableAt } from "./mineable.js";
+import { tileAt, stageAt, rockRawAt, clampBox } from "./cells.js";
 import { doHarvest, toolDurabilityFor } from "./resources.js";
 import { updateResourceUI } from "./ui.js";
 import { updateCraftedHud } from "./crafting.js";
@@ -31,7 +32,7 @@ export function canPlaceFootprint(type, col, row) {
   const tiles = def.placeableTiles;
   for (const [c, r] of buildingCells(col, row)) {
     if (!inBounds(c, r)) return false;
-    if (tiles.indexOf(G.world.tiles[r][c]) < 0) return false;
+    if (tiles.indexOf(tileAt(c, r)) < 0) return false;
     if (cellObject(c, r)) return false;            // tree or rock present
   }
   // No overlap with an existing building's footprint.
@@ -231,7 +232,7 @@ export function findBuilding(id) {
 
 function footprintKeys(col, row) {
   const set = new Set();
-  for (const [c, r] of buildingCells(col, row)) set.add(r * G.world.cols + c);
+  for (const [c, r] of buildingCells(col, row)) set.add(c + "," + r);
   return set;
 }
 
@@ -248,8 +249,8 @@ export function buildingCenter(b) {
 // it can actually extract a given vein is decided per-swing by toughness vs the
 // hut's pickaxe sharpness.)
 function isEligible(targetKind, c, r) {
-  if (targetKind === "tree") return G.world.stage[r][c] >= GD.matureStage;
-  if (targetKind === "rock") return G.world.rock[r][c] >= 0; // any encoded mineable
+  if (targetKind === "tree") return stageAt(c, r) >= GD.matureStage;
+  if (targetKind === "rock") return rockRawAt(c, r) >= 0; // any encoded mineable
   return false;
 }
 
@@ -260,13 +261,11 @@ export function cellsInRange(type, col, row) {
   const radius = GD.buildings[type].harvestRadius;
   const cx = col + 0.5, cy = row + 0.5;              // 2x2 footprint center
   const r2 = (radius + 0.5) * (radius + 0.5);
-  const c0 = Math.max(0, Math.floor(cx - radius - 1));
-  const c1 = Math.min(G.world.cols - 1, Math.ceil(cx + radius + 1));
-  const r0 = Math.max(0, Math.floor(cy - radius - 1));
-  const r1 = Math.min(G.world.rows - 1, Math.ceil(cy + radius + 1));
+  const box = clampBox(Math.floor(cx - radius - 1), Math.ceil(cx + radius + 1),
+    Math.floor(cy - radius - 1), Math.ceil(cy + radius + 1));
   const out = [];
-  for (let r = r0; r <= r1; r++) {
-    for (let c = c0; c <= c1; c++) {
+  for (let r = box.r0; r <= box.r1; r++) {
+    for (let c = box.c0; c <= box.c1; c++) {
       const d2 = (c + 0.5 - cx) * (c + 0.5 - cx) + (r + 0.5 - cy) * (r + 0.5 - cy);
       if (d2 <= r2) out.push({ c, r });
     }
@@ -281,16 +280,14 @@ export function buildingTargets(b) {
   const radius = def.harvestRadius;
   const cx = b.col + 0.5, cy = b.row + 0.5;          // footprint center in cells
   const r2 = (radius + 0.5) * (radius + 0.5);        // +0.5 so edge tiles count
-  const c0 = Math.max(0, Math.floor(cx - radius - 1));
-  const c1 = Math.min(G.world.cols - 1, Math.ceil(cx + radius + 1));
-  const r0 = Math.max(0, Math.floor(cy - radius - 1));
-  const r1 = Math.min(G.world.rows - 1, Math.ceil(cy + radius + 1));
+  const box = clampBox(Math.floor(cx - radius - 1), Math.ceil(cx + radius + 1),
+    Math.floor(cy - radius - 1), Math.ceil(cy + radius + 1));
   const out = [];
-  for (let r = r0; r <= r1; r++) {
-    for (let c = c0; c <= c1; c++) {
+  for (let r = box.r0; r <= box.r1; r++) {
+    for (let c = box.c0; c <= box.c1; c++) {
       const d2 = (c + 0.5 - cx) * (c + 0.5 - cx) + (r + 0.5 - cy) * (r + 0.5 - cy);
       if (d2 > r2) continue;
-      if (isEligible(def.targetKind, c, r)) out.push({ c, r, d2, key: r * G.world.cols + c });
+      if (isEligible(def.targetKind, c, r)) out.push({ c, r, d2, key: c + "," + r });
     }
   }
   out.sort((a, b) => a.d2 - b.d2);

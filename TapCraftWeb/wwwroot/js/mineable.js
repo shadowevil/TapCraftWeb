@@ -11,6 +11,7 @@
 
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
+import { rockRawAt, setRockRaw } from "./cells.js";
 
 export const MINEABLE_TYPES = ["rock", "iron_vein", "gold_vein"];
 const STRIDE = 100;
@@ -29,19 +30,17 @@ export function decodeMineable(raw) {
 }
 export function encodeMineable(typeIndex, variant) { return typeIndex * STRIDE + (variant | 0); }
 
-// The mineable on a cell (reads G.world.rock), or null.
+// The mineable on a cell (reads the rock layer via cells.js), or null.
 export function mineableAt(c, r) {
-  const row = G.world.rock[r];
-  return row ? decodeMineable(row[c]) : null;
+  return decodeMineable(rockRawAt(c, r));
 }
 export function setMineable(c, r, typeId, variant) {
   const i = mineableTypeIndex(typeId);
   if (i < 0) return;
-  G.world.rock[r][c] = encodeMineable(i, variant || 0);
+  setRockRaw(c, r, encodeMineable(i, variant || 0));
 }
 export function hasMineable(c, r) {
-  const row = G.world.rock[r];
-  return !!row && row[c] >= 0;
+  return rockRawAt(c, r) >= 0;
 }
 
 // The data def + resolved variant sprite for a decoded mineable.

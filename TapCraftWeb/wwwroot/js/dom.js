@@ -57,5 +57,6 @@ export const ui = {
   rockDensity: el("tc-rock-density"), rockDensityVal: el("tc-rock-density-val"),
   rockCluster: el("tc-rock-cluster"), rockClusterVal: el("tc-rock-cluster-val"),
   mineral: el("tc-mineral"), mineralVal: el("tc-mineral-val"),
+  infinite: el("tc-infinite"),
   seed: el("tc-seed"),
 };

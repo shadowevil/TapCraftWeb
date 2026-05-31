@@ -15,13 +15,12 @@ export const G = {
     rows: 0,
     seed: 0,
     settings: { landFraction: 0.55, growthRate: 1.0, forestDensity: 0.4, cluster: 0.6, rockDensity: 0.4, rockCluster: 0.6 },
-    tiles: [],
-    stage: [],     // [r][c] -1 none, 0..MATURE  (trees)
-    progress: [],  // [r][c] growth toward next stage
-    chop: [],      // [r][c] clicks landed on a mature tree
-    rock: [],      // [r][c] -1 none, else encoded mineable = typeIndex*100+variant
-                   //   (typeIndex 0=stone rock, 1=iron vein, 2=gold vein - see
-                   //   MINEABLE_TYPES in mineable.js; stone=0 keeps old saves valid)
+    // Terrain is generated per-cell on demand from the seed (see cells.js); only
+    // MODIFIED cells are stored here, so worlds can be arbitrarily large / infinite.
+    infinite: false,     // true = unbounded world (no cols/rows edge); false = finite cols x rows
+    mods: new Map(),     // "c,r" -> { t?, st?, pr?, ch?, rk? } delta fields
+    landThreshold: 0,    // elevation cutoff for land/water (sampled at creation)
+    spawn: { c: 0, r: 0 }, // initial camera-center land cell
     wood: 0,       // collected wood
     stone: 0,      // collected stone
     iron: 0,       // collected iron ore
@@ -45,6 +44,7 @@ export const G = {
   oreImages: {},          // mineable typeId -> [variant Images] (rock/iron_vein/gold_vein)
 
   cam: { x: 0, y: 0, zoom: 2 },
+  camRestored: false,         // true when loadWorld restored a saved camera (skip fit/spawn)
   running: false,
   hasWorld: false,
   inMenu: false,

@@ -29,6 +29,20 @@ export const AUTOSAVE_MS = 5000;
 export const MENU_SIZE = 32;   // background island size on the main menu
 export const PARALLAX = 46;    // max menu parallax shift (px)
 
+// --- Viewport / zoom (engine) -----------------------------------------
+// Hard cap on cells swept per frame: the minimum zoom (max zoom-out) is derived
+// so the visible window never exceeds this, keeping huge/infinite worlds smooth.
+// Each visible cell costs a tile drawImage (plus per-cell work), so this directly
+// bounds the render cost. Lower = smoother but less zoom-out range.
+export const MAX_VISIBLE_CELLS = 8000;
+// Below this zoom, cast shadows are skipped (they are sub-pixel/invisible when
+// zoomed far out, and drawing one per entity is a big share of the entity pass).
+export const SHADOW_MIN_ZOOM = 0.9;
+// Below this zoom the water animation is frozen (one fixed frame). The floor is
+// cached to an offscreen layer; freezing water keeps that cache valid every frame
+// when zoomed out (waves are imperceptible there) so the floor isn't re-rendered.
+export const WATER_ANIM_MIN_ZOOM = 2.0;
+
 // --- Click "pop" + resource-drop physics (feel) -----------------------
 export const POP_MS = 280;     // tree click "pop" duration
 export const POP_AMOUNT = 0.22; // peak extra scale on the pop

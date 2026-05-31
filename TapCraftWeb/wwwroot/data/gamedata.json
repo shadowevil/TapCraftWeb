@@ -1,5 +1,5 @@
 {
-  "version": 18,
+  "version": 20,
 
   "tiles": {
     "grass": { "src": "/assets/tiles/grass.png" },
@@ -212,6 +212,14 @@
     "stageFull": 1000,
     "gainMin": 1,
     "gainMax": 5,
+    "islandMaxSize": 128,
+    "growth": {
+      "bands": [
+        { "radius": 32, "period": 1 },
+        { "radius": 72, "period": 8 },
+        { "radius": 128, "period": 40 }
+      ]
+    },
     "rock": {
       "fillMax": 0.85,
       "scaleTight": 0.16,
@@ -238,7 +246,7 @@
   },
 
   "sliders": {
-    "size":        { "min": 16,  "max": 100, "step": 1,   "default": 48 },
+    "size":        { "min": 16,  "max": 10000, "step": 1, "default": 48 },
     "land":        { "min": 0,   "max": 100, "step": 1,   "default": 55 },
     "growth":      { "min": 0.1, "max": 10,  "step": 0.1, "default": 1  },
     "density":     { "min": 0,   "max": 100, "step": 1,   "default": 40 },

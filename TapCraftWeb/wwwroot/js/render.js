@@ -5,7 +5,7 @@
 import {
   SPRITE, HALF_W, HALF_H, OBJECT_LIFT,
   SHADOW_ALPHA, SHADOW_SKEW, SHADOW_SQUASH,
-  SHADOW_POOL_ALPHA, SHADOW_POOL_RATIO, DROP_SCALE,
+  SHADOW_POOL_ALPHA, SHADOW_POOL_RATIO, DROP_SCALE, SHADOW_MIN_ZOOM, WATER_ANIM_MIN_ZOOM,
 } from "./config.js";
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
@@ -20,6 +20,8 @@ import {
 import { popFactor, dropImage, dropScreen } from "./resources.js";
 import { canPlaceFootprint, canAffordBuilding, buildingTargets, cellsInRange, hutToolKind, hutToolCount } from "./buildings.js";
 import { mineableAt, mineableSprite } from "./mineable.js";
+import { tileAt, stageAt, progressAt, chopAt, rockRawAt, baseCacheSize } from "./cells.js";
+import { PERF, pBegin, pEnd, pCount } from "./perf.js";
 import { positionBuildingPanel, updateBuildHint } from "./ui.js";
 
 // Sprite + placement for a plant cell (shared by render and hit-testing so
@@ -46,7 +48,7 @@ export function cellObject(c, r) {
     if (!img) return null;
     return { kind: m.typeId, mineable: true, img, lift: OBJECT_LIFT, sc: 1, flip: false, variant: m.variant };
   }
-  const st = G.world.stage[r][c];
+  const st = stageAt(c, r);
   if (st >= 0) {
     const dp = plantDrawParams(st, c, r);
     if (!dp) return null;
@@ -58,12 +60,33 @@ export function cellObject(c, r) {
 // Pixel-perfect hit test: the front-most targetable object whose opaque
 // pixels are under the screen point (px, py), or null. Tests the un-popped
 // sprite so the hitbox stays stable during the click "pop".
+// Max object sprite extent (image px) used to bound the hit-test window: a tall
+// tree rooted behind the cursor can still cover it, so we search a small screen
+// box around (px,py) rather than the whole viewport - making hit-testing O(1) in
+// the visible-cell count (critical when zoomed far out over a huge world).
+const HIT_HMAX = 128, HIT_WMAX = 80;
 export function objectAt(px, py) {
   if (!G.hasWorld) return null;
   const z = G.cam.zoom;
-  const b = visibleCellBounds();
-  for (let r = b.r1; r >= b.r0; r--) {      // front-to-back (reverse paint order)
-    for (let c = b.c1; c >= b.c0; c--) {
+  // Screen box around the cursor -> the (small) range of cells whose sprites
+  // could overlap it. Generous in every direction so no hit is missed.
+  const pts = [
+    screenToWorld(px - HIT_WMAX * z, py - HIT_HMAX * z),
+    screenToWorld(px + HIT_WMAX * z, py - HIT_HMAX * z),
+    screenToWorld(px - HIT_WMAX * z, py + HIT_HMAX * z),
+    screenToWorld(px + HIT_WMAX * z, py + HIT_HMAX * z),
+  ];
+  let minC = Infinity, maxC = -Infinity, minR = Infinity, maxR = -Infinity;
+  for (const p of pts) {
+    const cell = worldToCell(p.x, p.y);
+    if (cell.col < minC) minC = cell.col; if (cell.col > maxC) maxC = cell.col;
+    if (cell.row < minR) minR = cell.row; if (cell.row > maxR) maxR = cell.row;
+  }
+  const c0 = Math.floor(minC) - 1, c1 = Math.ceil(maxC) + 1;
+  const r0 = Math.floor(minR) - 1, r1 = Math.ceil(maxR) + 1;
+  for (let r = r1; r >= r0; r--) {          // front-to-back (reverse paint order)
+    for (let c = c1; c >= c0; c--) {
+      if (!inBounds(c, r)) continue;
       const obj = cellObject(c, r);
       if (!obj || !obj.img.complete) continue;
       const t = GD.objects[obj.kind];
@@ -223,7 +246,7 @@ export function drawBuilding(b, z, bright) {
   if (!img || !img.complete) return;
   const a = buildingAnchor(b.col, b.row);
   const r = spriteRectAt(img, a, z, 0, 1);
-  drawShadowRect(img, a.x, r, z, false);
+  if (z >= SHADOW_MIN_ZOOM) drawShadowRect(img, a.x, r, z, false);
   if (bright) ctx.filter = "brightness(1.5)";
   ctx.drawImage(img, r.tx, r.ty, r.dw, r.dh);
   if (bright) ctx.filter = "none";
@@ -233,8 +256,7 @@ export function drawBuilding(b, z, bright) {
 // hover brighten, and - if it is the active cell - the bobbing outline ring
 // wrapping it (back edges behind, front edges in front). Used by the unified
 // entity pass so objects and buildings interleave by depth.
-function drawCellObject(c, r, z, activeCell) {
-  const obj = cellObject(c, r);
+function drawCellObject(c, r, z, activeCell, obj) {
   const isActive = activeCell && activeCell.col === c && activeCell.row === r;
   if (!obj || !obj.img.complete) {
     // Active empty/flat cell still needs its ground ring (no object to wrap).
@@ -245,7 +267,7 @@ function drawCellObject(c, r, z, activeCell) {
   const sc = obj.sc * popFactor(c, r);
   const diamond = isActive ? tileDiamond(s, z) : null;
   if (diamond) strokeDiamondHalf(diamond, "back");
-  drawShadow(obj.img, s, z, obj.lift, sc, obj.flip); // cast before the sprite
+  if (z >= SHADOW_MIN_ZOOM) drawShadow(obj.img, s, z, obj.lift, sc, obj.flip); // cast before the sprite
   const hl = G.hover && G.hover.col === c && G.hover.row === r;
   if (hl) ctx.filter = "brightness(1.6)";
   drawSprite(obj.img, s, z, obj.lift, sc, obj.flip);
@@ -320,11 +342,44 @@ function drawSmokeFrame(img, cx, baseY, unit, alpha) {
   ctx.globalAlpha = 1;
 }
 
+// --- Floor cache -----------------------------------------------------
+// The floor (ground tiles) only changes when the camera pans/zooms or the water
+// frame advances - tiles themselves never change at runtime. Rather than redraw
+// every visible tile each frame (thousands of drawImage calls when zoomed out),
+// we render the floor once into an offscreen canvas and blit it; it is only
+// re-rendered when its signature changes. The offscreen canvas mirrors the main
+// canvas backing + DPR transform so the blit is a 1:1 device-pixel copy.
+let floorCanvas = null, floorCtx = null, floorKey = "";
+function ensureFloorCanvas() {
+  if (!floorCanvas) { floorCanvas = document.createElement("canvas"); floorCtx = floorCanvas.getContext("2d"); }
+  if (floorCanvas.width !== canvas.width || floorCanvas.height !== canvas.height) {
+    floorCanvas.width = canvas.width; floorCanvas.height = canvas.height;
+    floorKey = ""; // size changed -> force a redraw
+  }
+}
+function renderFloor(b, z, waterFrame) {
+  const dpr = window.devicePixelRatio || 1;
+  floorCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  floorCtx.imageSmoothingEnabled = false;
+  floorCtx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+  const cx = G.cam.x, cy = G.cam.y, half = (SPRITE / 2) * z;
+  for (let r = b.r0; r <= b.r1; r++) {
+    for (let c = b.c0; c <= b.c1; c++) {
+      const tImg = tileSprite(tileAt(c, r), c, r, waterFrame);
+      if (!tImg || !tImg.complete) continue;
+      const sx = (c - r) * HALF_W * z + cx, sy = (c + r) * HALF_H * z + cy;
+      const dw = (tImg.naturalWidth || SPRITE) * z, dh = (tImg.naturalHeight || SPRITE) * z;
+      floorCtx.drawImage(tImg, sx - dw / 2, sy + half - dh, dw, dh);
+    }
+  }
+}
+
 export function render() {
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
   if (!G.hasWorld) { G.hover = null; G.hoverTile = null; G.showHatchet = false; G.showPickaxe = false; canvas.style.cursor = "default"; return; }
   const active = !G.inMenu && G.mouse.on;
+  const _h0 = pBegin();
   G.hover = active ? objectAt(G.mouse.x, G.mouse.y) : null;
   // Building hover (resource wins): only when no targetable object is under the
   // cursor, and never while placing a new building.
@@ -337,6 +392,7 @@ export function render() {
   } else {
     G.hoverTile = null;
   }
+  pEnd("hover", _h0);
   // Tool cursor (OS cursor hidden): hatchet over a choppable tree, pickaxe over
   // any mineable (rock/iron/gold vein). While holding to harvest, lock the tool
   // to the held category ("tree" | "mine").
@@ -351,33 +407,40 @@ export function render() {
   if (canvas.style.cursor !== wantCursor) canvas.style.cursor = wantCursor;
   const z = G.cam.zoom;
   const b = visibleCellBounds();
-  const waterFrame = waterFrameIndex(); // same for all water cells this frame
+  // Freeze the water animation when zoomed out so the cached floor stays valid
+  // every frame (waves are imperceptible there); animate it only when zoomed in.
+  const waterFrame = (z < WATER_ANIM_MIN_ZOOM) ? 0 : waterFrameIndex();
   // The active cell is the hovered tree's cell (if any), else the ground tile.
   const activeCell = G.hover || G.hoverTile;
-  // Pass A - floor: every visible ground tile.
-  for (let r = b.r0; r <= b.r1; r++) {
-    for (let c = b.c0; c <= b.c1; c++) {
-      const tImg = tileSprite(G.world.tiles[r][c], c, r, waterFrame);
-      if (tImg && tImg.complete) {
-        const s = worldToScreen(cellCenter(c, r).x, cellCenter(c, r).y);
-        drawSprite(tImg, s, z, 0, 1, false);
-      }
-    }
-  }
 
-  // Pass B - entities: ONE depth-sorted list of all objects (rocks/trees) and
-  // buildings, drawn over the floor in back-to-front order. A single sort makes
-  // the 2x2 building "just another entity", so objects and buildings interleave
-  // correctly (a tree in front of a building draws over it; a rock behind it is
-  // covered) with no special-case post-pass. Depth key: 1-tile object uses r+c;
-  // a building uses its FRONT tile (row+1)+(col+1). Ties broken by column so the
-  // east-most of a shared diagonal paints last.
+  // Floor: cached. Re-render the tiles into the offscreen layer only when its
+  // signature (camera/zoom/water frame/visible range) changes; otherwise blit the
+  // cached layer with one device-pixel copy. This removes the per-tile floor draw
+  // (the zoom-out hot path) on every frame where nothing about the floor moved.
+  const _w0 = pBegin();
+  ensureFloorCanvas();
+  const fkey = G.cam.x + "|" + G.cam.y + "|" + z + "|" + waterFrame + "|" + b.c0 + "|" + b.r0 + "|" + b.c1 + "|" + b.r1;
+  if (fkey !== floorKey) { renderFloor(b, z, waterFrame); floorKey = fkey; }
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);   // identity: blit backing 1:1
+  ctx.drawImage(floorCanvas, 0, 0);
+  ctx.restore();
+  pCount("cells", (b.c1 - b.c0 + 1) * (b.r1 - b.r0 + 1));
+  pEnd("world", _w0);
+
+  // Entities: collect each visible cell's object (computed once), depth-sort with
+  // buildings, draw back-to-front over the floor. Runs every frame (objects grow,
+  // animate, highlight on hover). Depth key: 1-tile object uses r+c; a building uses
+  // its FRONT tile (row+1)+(col+1). Ties broken by column so the east-most paints last.
+  const _e0 = pBegin();
   const entities = [];
   for (let r = b.r0; r <= b.r1; r++) {
     for (let c = b.c0; c <= b.c1; c++) {
-      const obj = cellObject(c, r);
       const isActive = activeCell && activeCell.col === c && activeCell.row === r;
-      if (obj || isActive) entities.push({ depth: r + c, col: c, c, r, kind: "obj" });
+      // Water never holds an object (trees/rocks/ore only spawn on land), so skip
+      // the per-cell object probe there.
+      const obj = (tileAt(c, r) === "water") ? null : cellObject(c, r);
+      if (obj || isActive) entities.push({ depth: r + c, col: c, c, r, obj, kind: "obj" });
     }
   }
   for (const bd of G.world.buildings) {
@@ -386,11 +449,14 @@ export function render() {
   entities.sort((a, e) => (a.depth - e.depth) || (a.col - e.col) || (a.kind === "bld" ? -1 : 1));
   for (const e of entities) {
     if (e.kind === "bld") drawBuildingEntity(e.bd, z);
-    else drawCellObject(e.c, e.r, z, activeCell);
+    else drawCellObject(e.c, e.r, z, activeCell, e.obj);
   }
+  pCount("entities", entities.length);
+  pEnd("entities", _e0);
 
   // Ground drops (resource pickups) drawn on top of the world, each with a
   // matching cast shadow sheared along the ground.
+  const _o0 = pBegin();
   for (const d of G.drops) {
     if (d.phase === "fly") continue;
     const img = dropImage(d.kind);
@@ -464,6 +530,7 @@ export function render() {
   // the current camera/selection (DOM overlays, updated once per rendered frame).
   positionBuildingPanel();
   updateBuildHint();
+  pEnd("overlay", _o0);
 }
 
 // --- Dev: live cell inspector overlay --------------------------------
@@ -479,11 +546,11 @@ function drawDebugOverlay(z) {
   } else {
     const c = cell.col, r = cell.row;
     const inB = inBounds(c, r);
-    const tile = inB ? G.world.tiles[r][c] : "(out of bounds)";
-    const stage = inB ? G.world.stage[r][c] : -1;
-    const rock = inB ? G.world.rock[r][c] : -1;
-    const prog = inB ? (G.world.progress[r][c] | 0) : 0;
-    const chop = inB ? (G.world.chop[r][c] | 0) : 0;
+    const tile = inB ? tileAt(c, r) : "(out of bounds)";
+    const stage = inB ? stageAt(c, r) : -1;
+    const rock = inB ? rockRawAt(c, r) : -1;
+    const prog = inB ? (progressAt(c, r) | 0) : 0;
+    const chop = inB ? (chopAt(c, r) | 0) : 0;
     const center = cellCenter(c, r);
     const s = worldToScreen(center.x, center.y);
     const tImg = inB ? tileSprite(tile, c, r, waterFrameIndex()) : null;
@@ -514,6 +581,17 @@ function drawDebugOverlay(z) {
     ctx.lineTo(s.x, s.y + hh); ctx.lineTo(s.x - hw, s.y); ctx.closePath();
     ctx.lineWidth = 2; ctx.strokeStyle = "rgba(0, 255, 255, 0.95)"; ctx.stroke();
   }
+  // Per-frame profiler readout (smoothed ms). 'frame' is the whole RAF callback;
+  // sim = growth + building updates this frame; render = hover + world + entities +
+  // overlay; world = floor draw + per-cell object probe (the zoom-out hot path).
+  lines.push("");
+  lines.push("PERF  fps " + PERF.fps.toFixed(0) + "   ms (avg)");
+  const phaseOrder = ["frame", "sim", "growth", "buildings", "anim", "render", "hover", "world", "entities", "overlay", "fx"];
+  for (const name of phaseOrder) {
+    if (PERF.ms[name] !== undefined) lines.push("  " + name.padEnd(9) + PERF.ms[name].toFixed(2));
+  }
+  lines.push("cells " + (PERF.count.cells || 0) + "  entities " + (PERF.count.entities || 0));
+  lines.push("baseCache " + baseCacheSize() + "  mods " + G.world.mods.size);
   // Text panel, top-left, fixed (screen). Start it BELOW the crafted-tools HUD
   // (which also floats top-left and can wrap to multiple rows) so they never
   // overlap. Coords are canvas-relative; the HUD/canvas rects convert for us.

@@ -5,8 +5,8 @@
 import { WORLDS_KEY, CURRENT_KEY, worldKey } from "./config.js";
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
-import { makeLayer } from "./rng.js";
 import { newTools, resetTransients } from "./worldgen.js";
+import { initWorldGen } from "./cells.js";
 import { updateResourceUI } from "./ui.js";
 import { updateCraftedHud } from "./crafting.js";
 
@@ -103,12 +103,16 @@ export function writeWorldsIndex(list) {
 export function saveWorld() {
   if (!G.hasWorld || !G.world.id) return; // menu background has no id -> not saved
   try {
+    // Terrain is procedural - we save the seed + settings, NOT the cells. Only the
+    // sparse map of modified cells (G.world.mods) is persisted, so even an infinite
+    // world's save stays small (it grows only with what the player changes).
     localStorage.setItem(worldKey(G.world.id), JSON.stringify({
-      version: 10, id: G.world.id, name: G.world.name,
-      cols: G.world.cols, rows: G.world.rows, seed: G.world.seed,
-      settings: G.world.settings, tiles: G.world.tiles,
-      stage: G.world.stage, progress: G.world.progress,
-      chop: G.world.chop, rock: G.world.rock,
+      version: 11, id: G.world.id, name: G.world.name,
+      infinite: G.world.infinite, cols: G.world.cols, rows: G.world.rows, seed: G.world.seed,
+      settings: G.world.settings,
+      landThreshold: G.world.landThreshold, spawn: G.world.spawn,
+      cam: { x: G.cam.x, y: G.cam.y, zoom: G.cam.zoom },
+      mods: Array.from(G.world.mods.entries()),
       wood: G.world.wood, stone: G.world.stone, iron: G.world.iron, gold: G.world.gold,
       iron_ingot: G.world.iron_ingot, gold_ingot: G.world.gold_ingot,
       tools: G.world.tools, craft: G.world.craft,
@@ -130,14 +134,25 @@ export function loadWorld(id) {
   if (!json) return false;
   try {
     const d = JSON.parse(json);
-    if (!d || !Array.isArray(d.tiles)) return false;
+    if (!d) return false;
     G.world.id = d.id || id;
     G.world.name = d.name || "World";
-    G.world.cols = d.cols; G.world.rows = d.rows; G.world.seed = d.seed >>> 0;
+    G.world.infinite = !!d.infinite;
+    G.world.cols = d.cols | 0; G.world.rows = d.rows | 0; G.world.seed = d.seed >>> 0;
     G.world.settings = Object.assign({}, GD.defaults.worldSettings, d.settings);
-    G.world.tiles = d.tiles; G.world.stage = d.stage; G.world.progress = d.progress;
-    G.world.chop = Array.isArray(d.chop) ? d.chop : makeLayer(d.cols, d.rows, 0);
-    G.world.rock = Array.isArray(d.rock) ? d.rock : makeLayer(d.cols, d.rows, -1);
+    // Rebuild the procedural generator (noise closures); it also (re)derives the
+    // land threshold + spawn deterministically from the seed.
+    initWorldGen(G.world.seed, G.world.settings);
+    if ((d.version | 0) >= 11) {
+      if (typeof d.landThreshold === "number") G.world.landThreshold = d.landThreshold;
+      if (d.spawn) G.world.spawn = d.spawn;
+      G.world.mods = new Map(Array.isArray(d.mods) ? d.mods : []);
+    } else {
+      // Pre-procedural saves (always small) stored full cell arrays; import every
+      // cell as an explicit delta so the world renders exactly as it was saved.
+      G.world.mods = new Map();
+      migrateLegacyArrays(d);
+    }
     G.world.wood = d.wood | 0;
     G.world.stone = d.stone | 0;
     G.world.iron = d.iron | 0;
@@ -153,11 +168,33 @@ export function loadWorld(id) {
     G.drops = savedDrops.map((p) => ({ kind: p.kind || "wood", gx: p.gx, gy: p.gy, vx: 0, vy: 0, z: 0, vz: 0, phase: "rest" }));
     G.hasWorld = true;
     G.running = d.running !== false;
+    if (d.cam && typeof d.cam.zoom === "number") {
+      G.cam.x = d.cam.x; G.cam.y = d.cam.y; G.cam.zoom = d.cam.zoom; G.camRestored = true;
+    }
     localStorage.setItem(CURRENT_KEY, G.world.id);
     updateResourceUI();
     updateCraftedHud();
     return true;
   } catch (e) { return false; }
+}
+
+// Import a pre-procedural (version <= 10) save's full cell arrays into the sparse
+// delta map. Old worlds are small (<= 64x64), so this is a few thousand entries.
+function migrateLegacyArrays(d) {
+  const rows = d.rows | 0, cols = d.cols | 0;
+  const hasT = Array.isArray(d.tiles), hasS = Array.isArray(d.stage),
+    hasP = Array.isArray(d.progress), hasC = Array.isArray(d.chop), hasR = Array.isArray(d.rock);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const e = {};
+      if (hasT && d.tiles[r]) e.t = d.tiles[r][c];
+      if (hasS && d.stage[r]) e.st = d.stage[r][c];
+      if (hasP && d.progress[r]) e.pr = d.progress[r][c];
+      if (hasC && d.chop[r]) e.ch = d.chop[r][c] | 0;
+      if (hasR && d.rock[r]) e.rk = d.rock[r][c];
+      G.world.mods.set(c + "," + r, e);
+    }
+  }
 }
 export function deleteWorld(id) {
   localStorage.removeItem(worldKey(id));

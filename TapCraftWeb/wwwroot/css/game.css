@@ -1068,6 +1068,26 @@ body.tc-menu-mode .tc-events { display: none; }
   opacity: 0.7;
 }
 
+/* New-world "Infinite" checkbox + greyed-out size row when it is on. */
+.tc-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.tc-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--tc-accent);
+}
+
+.tc-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
 /* World-anchored building info panel --------------------------------- */
 .tc-bpanel {
   position: fixed;
