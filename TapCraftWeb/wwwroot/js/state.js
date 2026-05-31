@@ -27,9 +27,11 @@ export const G = {
     gold: 0,       // collected gold ore
     iron_ingot: 0, // smelted iron ingots
     gold_ingot: 0, // smelted gold ingots
+    gold_coin: 0,  // minted gold coins (Coinery; no functional use yet)
     tools: null,   // { hatchet:{count,dura}, pickaxe:{count,dura} } (dura = active instance)
     craft: null,   // { <craftableId>: { remaining, elapsed } } in-progress batches
     buildings: [], // [{ id, type, col, row, facing, produced:{<res>:n} }] placed buildings
+    timeOfDay: 0.3, // day/night phase: 0=midnight, 0.25=sunrise, 0.5=noon, 0.75=sunset
     tick: 0,
   },
 
@@ -84,6 +86,7 @@ export const G = {
     windTimer: null,          // pending wind-overlay timeout id
     overlays: {},             // active overlay id -> { source, gain }
     lastBuildingSfxAt: 0,     // perf-clock ms of the last building-caused SFX (global rate cap)
+    worldPaused: false,       // game paused -> world/ambient channels ducked to silent (music stays)
   },
 
   images: {},

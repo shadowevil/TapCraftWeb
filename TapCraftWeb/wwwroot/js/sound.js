@@ -16,6 +16,19 @@ import { GD } from "./gamedata.js";
 const CHANNELS = ["music", "ambience", "effects", "building"]; // master is the parent
 const AUDIO_KEY = "tapcraft.audio";
 
+// Ambience-loop gain target (1 = full). Ducked below 1 while it rains so the rain
+// overlay (also on the ambience channel) stands out over the bird/day loops. Held in
+// a module var so it survives track crossfades (every loop fades in toward it).
+let ambienceDuck = 1;
+let rainApplied = -1; // last rain level pushed to the audio graph (throttle re-ramps)
+
+// Ramp a GainParam toward a target over `sec`, from its current value (no click).
+function rampGain(p, target, sec) {
+  const t = G.audio.ctx.currentTime;
+  try { p.cancelScheduledValues(t); p.setValueAtTime(p.value, t); p.linearRampToValueAtTime(target, t + sec); }
+  catch (e) { try { p.value = target; } catch (e2) { /* ignore */ } }
+}
+
 // --- Settings (persisted globally) -----------------------------------
 function defaultSettings() {
   const ch = GD.sounds.channels;
@@ -61,11 +74,34 @@ export function initAudio() {
   applyAllGains();
 }
 
-function gainFor(name) { const s = G.audio.settings[name]; return s.mute ? 0 : s.vol; }
+// Channels silenced while the game is paused (world + ambient); music plays on.
+const PAUSABLE = new Set(["ambience", "effects", "building"]);
+function gainFor(name) {
+  const s = G.audio.settings[name];
+  if (G.audio.worldPaused && PAUSABLE.has(name)) return 0; // ducked while paused
+  return s.mute ? 0 : s.vol;
+}
 function applyAllGains() {
   if (!G.audio.ctx) return;
   G.audio.masterGain.gain.value = gainFor("master");
   for (const name of CHANNELS) G.audio.channels[name].gain.value = gainFor(name);
+}
+
+// Pause/resume the world + ambient sound (music keeps playing). Ramped briefly so
+// the ambience loop fades rather than clicking. Called from setRunning (play/pause).
+export function setWorldAudioPaused(paused) {
+  const A = G.audio;
+  A.worldPaused = !!paused;
+  if (!A.ctx) return;
+  const t = A.ctx.currentTime;
+  for (const name of CHANNELS) {
+    const g = A.channels[name].gain;
+    try {
+      g.cancelScheduledValues(t);
+      g.setValueAtTime(g.value, t);
+      g.linearRampToValueAtTime(gainFor(name), t + 0.18);
+    } catch (e) { g.value = gainFor(name); }
+  }
 }
 
 // Resume the context after the first user gesture (autoplay policy).
@@ -89,6 +125,7 @@ function allSoundUrls() {
     (o.srcs || []).forEach((u) => urls.add(u));
   }
   for (const g of Object.keys(s.effects || {})) (s.effects[g] || []).forEach((u) => urls.add(u));
+  ((s.thunder && s.thunder.clips) || []).forEach((c) => { if (c.src) urls.add(c.src); });
   return [...urls];
 }
 // Fetch + decode all sounds into the buffer cache. Per-file failures are
@@ -150,8 +187,9 @@ function playLoopFadeIn(url, channelName, fadeMs) {
   src.buffer = buf; src.loop = true;
   const g = A.ctx.createGain();
   const t = A.ctx.currentTime;
+  const target = channelName === "ambience" ? ambienceDuck : 1; // honor the rain duck
   g.gain.setValueAtTime(0.0001, t);
-  g.gain.linearRampToValueAtTime(1, t + fadeMs / 1000);
+  g.gain.linearRampToValueAtTime(target, t + fadeMs / 1000);
   src.connect(g); g.connect(A.channels[channelName]);
   src.start();
   return { src, gain: g };
@@ -167,35 +205,69 @@ function fadeOutStop(node, fadeMs) {
   } catch (e) { /* already stopped */ }
 }
 
+function ambienceTracks(mode) { return GD.sounds.ambience[mode] || GD.sounds.ambience.day || []; }
+function tracksReady(tracks) { return tracks.length && tracks.some((u) => G.audio.buffers[u]); }
+// Day vs night from the current time-of-day phase (computed inline to avoid a
+// circular import with env.js, which calls setAmbienceMode below).
+function curAmbienceMode() { return (-Math.cos((G.world.timeOfDay || 0) * Math.PI * 2) < 0) ? "night" : "day"; }
+
 export function startAmbience() {
   const A = G.audio;
-  if (!A.ctx || !A.resumed) return;
-  if (A.ambience) return; // already running
-  const tracks = GD.sounds.ambience.day || [];
-  if (!tracks.length || !tracks.some((u) => A.buffers[u])) return; // nothing decoded yet
+  if (!A.ctx || !A.resumed || A.ambience) return; // need audio + not already running
   const cf = GD.sounds.ambience.crossfadeMs, hold = GD.sounds.ambience.trackHoldMs;
-  const state = { idx: 0, node: null, timer: null };
+  let mode = curAmbienceMode();
+  let tracks = ambienceTracks(mode);
+  if (!tracksReady(tracks)) { mode = "day"; tracks = ambienceTracks("day"); } // night set undecoded -> day
+  if (!tracksReady(tracks)) return; // nothing decoded yet
+  const state = { mode, tracks, idx: 0, node: null, timer: null, startTimer: null, next: null };
   A.ambience = state;
-  const playIdx = (i) => {
-    state.node = playLoopFadeIn(tracks[i], "ambience", cf);
-    state.idx = i;
-    state.timer = setTimeout(next, hold + cf);
-  };
-  const next = () => {
-    const ni = (state.idx + 1) % tracks.length;
+  state.next = () => {
+    const ni = (state.idx + 1) % state.tracks.length;
     const old = state.node;
-    state.node = playLoopFadeIn(tracks[ni], "ambience", cf);
+    state.node = playLoopFadeIn(state.tracks[ni], "ambience", cf);
     state.idx = ni;
     fadeOutStop(old, cf);
-    state.timer = setTimeout(next, hold + cf);
+    state.timer = setTimeout(state.next, hold + cf);
   };
-  playIdx(0);
+  state.node = playLoopFadeIn(state.tracks[0], "ambience", cf);
+  state.timer = setTimeout(state.next, hold + cf);
   startWind();
+}
+
+// Hand the ambience over to the day or night track set (called by env.js on the
+// dawn/dusk flip). No-op if already in that mode or the requested set isn't decoded.
+// This is a GRADUAL sequential handoff, not an abrupt swap: the current set fades
+// fully out over modeFadeMs, and the new set is gently brought in partway through
+// that fade - so the daytime sounds taper off and, just as they end, the night
+// sounds rise in (and vice versa). The overlapping tail keeps it from going silent.
+export function setAmbienceMode(mode) {
+  const A = G.audio;
+  if (!A.ctx || !A.resumed || !A.ambience) return;
+  const want = mode === "night" ? "night" : "day";
+  if (A.ambience.mode === want) return;
+  const tracks = ambienceTracks(want);
+  if (!tracksReady(tracks)) return; // requested set unavailable - keep current
+  const cf = GD.sounds.ambience.crossfadeMs, hold = GD.sounds.ambience.trackHoldMs;
+  const fade = GD.sounds.ambience.modeFadeMs || cf * 2;
+  const old = A.ambience.node;
+  fadeOutStop(old, fade);                 // gradually lose the current set
+  A.ambience.mode = want; A.ambience.tracks = tracks; A.ambience.idx = 0;
+  A.ambience.node = null;                 // nothing "current" during the handoff
+  clearTimeout(A.ambience.timer); A.ambience.timer = null;
+  clearTimeout(A.ambience.startTimer);
+  // Bring the new set in once the old one is well into its fade-out.
+  A.ambience.startTimer = setTimeout(() => {
+    A.ambience.startTimer = null;
+    if (!A.ambience || A.ambience.mode !== want) return; // flipped again meanwhile
+    A.ambience.node = playLoopFadeIn(tracks[0], "ambience", Math.round(fade * 0.7));
+    A.ambience.timer = setTimeout(A.ambience.next, hold + cf);
+  }, Math.round(fade * 0.6));
 }
 export function stopAmbience() {
   const A = G.audio;
   if (A.ambience) {
     clearTimeout(A.ambience.timer);
+    clearTimeout(A.ambience.startTimer);
     fadeOutStop(A.ambience.node, 500);
     A.ambience = null;
   }
@@ -218,14 +290,23 @@ function startWind() {
     if (!buf) { scheduleNext(); return; } // nothing to play, keep the cadence
     const src = A.ctx.createBufferSource();
     src.buffer = buf;
-    src.connect(A.channels[w.channel] || A.channels.ambience);
+    // Fade the gust in and back out (it used to start/stop abruptly).
+    const g = A.ctx.createGain();
+    const t = A.ctx.currentTime, d = buf.duration, fade = Math.min((w.fadeMs || 1800) / 1000, d / 2);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(1, t + fade);
+    g.gain.setValueAtTime(1, t + Math.max(fade, d - fade));
+    g.gain.linearRampToValueAtTime(0.0001, t + d);
+    src.connect(g); g.connect(A.channels[w.channel] || A.channels.ambience);
     src.onended = scheduleNext; // gap timer starts only after the clip finishes
     src.start();
   };
   scheduleNext();
 }
 
-// --- Looping overlays (rain) - wired, not triggered yet --------------
+// --- Looping overlays (rain) -----------------------------------------
+// Start at silence with a gain node; the caller (setRainAudio) ramps it to the
+// wanted level so it fades in rather than popping on.
 export function startOverlay(id) {
   const A = G.audio;
   if (!A.ctx || !A.resumed || A.overlays[id]) return;
@@ -233,13 +314,66 @@ export function startOverlay(id) {
   if (!o || !o.src || !A.buffers[o.src]) return;
   const src = A.ctx.createBufferSource();
   src.buffer = A.buffers[o.src]; src.loop = !!o.loop;
-  src.connect(A.channels[o.channel] || A.channels.ambience);
+  const g = A.ctx.createGain();
+  g.gain.setValueAtTime(0.0001, A.ctx.currentTime);
+  src.connect(g); g.connect(A.channels[o.channel] || A.channels.ambience);
   src.start();
-  A.overlays[id] = { src };
+  A.overlays[id] = { src, gain: g };
 }
 export function stopOverlay(id) {
-  const ov = G.audio.overlays[id];
-  if (ov) { try { ov.src.stop(); } catch (e) { /* ignore */ } delete G.audio.overlays[id]; }
+  const A = G.audio, ov = A.overlays[id];
+  if (!ov) return;
+  delete A.overlays[id];
+  if (ov.gain && A.ctx) {
+    const t = A.ctx.currentTime;
+    try {
+      ov.gain.gain.cancelScheduledValues(t);
+      ov.gain.gain.setValueAtTime(ov.gain.gain.value, t);
+      ov.gain.gain.linearRampToValueAtTime(0.0001, t + 1.0);
+      ov.src.stop(t + 1.05);
+    } catch (e) { try { ov.src.stop(); } catch (e2) { /* ignore */ } }
+  } else { try { ov.src.stop(); } catch (e) { /* ignore */ } }
+}
+
+// Drive the rain audio from the live rain level (0..1): fade the looping rain
+// overlay in/out and DUCK the ambience loop (the bird/day-ambience) so the rain
+// reads through it. Both share the ambience channel, so we duck the loop's own gain
+// (re-applied across crossfades via ambienceDuck), not the whole channel. Called
+// every frame by weather.js, throttled so we only re-ramp on a real change.
+export function setRainAudio(level) {
+  const A = G.audio;
+  if (!A.ctx || !A.resumed) return;
+  if (Math.abs(level - rainApplied) < 0.02 && !(level <= 0.04 && A.overlays.rain)) return;
+  rainApplied = level;
+  const duckAmt = (GD.weather && GD.weather.birdDuck != null) ? GD.weather.birdDuck : 0.6;
+  ambienceDuck = Math.max(0, 1 - level * duckAmt);
+  if (A.ambience && A.ambience.node && A.ambience.node.gain) rampGain(A.ambience.node.gain.gain, ambienceDuck, 0.8);
+  const wantRain = level > 0.04;
+  if (wantRain) {
+    if (!A.overlays.rain) startOverlay("rain");
+    if (A.overlays.rain && A.overlays.rain.gain) rampGain(A.overlays.rain.gain.gain, level, 1.2);
+  } else if (A.overlays.rain) {
+    stopOverlay("rain");
+  }
+}
+
+// One-shot thunder clap: a random clip from GD.sounds.thunder, played at its own
+// per-clip level x the caller's volume scale (distance-based). On the ambience
+// channel, so it's ducked while paused like the rest of the world audio.
+export function playThunder(volScale) {
+  const A = G.audio;
+  if (!A.ctx || !A.resumed) return;
+  const t = GD.sounds.thunder;
+  if (!t || !t.clips || !t.clips.length) return;
+  const clip = t.clips[(Math.random() * t.clips.length) | 0];
+  const buf = clip && A.buffers[clip.src];
+  if (!buf) return;
+  const src = A.ctx.createBufferSource();
+  src.buffer = buf;
+  const g = A.ctx.createGain();
+  g.gain.value = Math.max(0, Math.min(1, (clip.level != null ? clip.level : 1) * volScale));
+  src.connect(g); g.connect(A.channels[t.channel] || A.channels.ambience);
+  src.start();
 }
 
 // --- Channel controls (for the options modal) ------------------------

@@ -30,7 +30,7 @@ import {
   forgeOreTypes, forgeFreeOre, depositOre, withdrawOre, depositFuel,
 } from "./buildings.js";
 import {
-  playSfx, getAudioSettings, setChannelVolume, setChannelMute,
+  playSfx, getAudioSettings, setChannelVolume, setChannelMute, setWorldAudioPaused,
 } from "./sound.js";
 
 export function updateResourceUI() {
@@ -90,6 +90,7 @@ export function startGame() {
     fitView();
   }
   updatePlayPause();
+  setWorldAudioPaused(!G.running); // match the world/ambient audio duck to the loaded running state
 }
 
 export function generateMenuWorld() {
@@ -115,6 +116,7 @@ export function showMainMenu() {
   if (G.world.id) saveWorld();        // persist the real world before leaving it
   G.inMenu = true;
   G.running = true;                   // animate the background island
+  setWorldAudioPaused(false);         // menu preview runs -> world/ambient audio audible
   document.body.classList.add("tc-menu-mode");
   menuModal.classList.add("hidden");
   newWorldModal.classList.add("hidden");
@@ -191,6 +193,14 @@ export function createWorld() {
   // Clamp each slider to its data-defined [min,max]/default. Percentage sliders
   // are authored 0..100 and scaled to 0..1 fractions; growth is a raw float.
   const pct = (s, key) => clampInt(s.value, sl[key].min, sl[key].max, sl[key].default) / 100;
+  // Integer slider value clamped to its data-defined [min,max]/default.
+  const intOf = (s, key) => clampInt(s.value, sl[key].min, sl[key].max, sl[key].default);
+  // Float slider value clamped to its data-defined [min,max]/default.
+  const floatOf = (s, key) => {
+    let n = Number(s.value);
+    if (!Number.isFinite(n)) n = sl[key].default;
+    return Math.min(sl[key].max, Math.max(sl[key].min, n));
+  };
   const infinite = !!(ui.infinite && ui.infinite.checked);
   const size = infinite ? 0 : clampInt(ui.size.value, sl.size.min, sl.size.max, sl.size.default);
   let seed = parseInt(ui.seed.value, 10);
@@ -204,6 +214,20 @@ export function createWorld() {
     rockDensity: pct(ui.rockDensity, "rockDensity"),
     rockCluster: pct(ui.rockCluster, "rockCluster"),
     mineral: pct(ui.mineral, "mineral"),
+    // Ambient + weather (per-world, persisted in G.world.settings; consumers read
+    // these with a GD fallback so old saves and the menu preview still work).
+    bugs: intOf(ui.bugs, "bugs"),
+    birds: intOf(ui.birds, "birds"),
+    cloudCount: intOf(ui.clouds, "clouds"),
+    weatherFreq: floatOf(ui.weatherFreq, "weatherFreq"),
+    dayMinutes: intOf(ui.dayMinutes, "dayMinutes"),
+    rainIntensity: floatOf(ui.rainIntensity, "rainIntensity"),
+    weights: {
+      clear: intOf(ui.weightClear, "weightClear"),
+      cloudy: intOf(ui.weightCloudy, "weightCloudy"),
+      rain: intOf(ui.weightRain, "weightRain"),
+      storm: intOf(ui.weightStorm, "weightStorm"),
+    },
   };
   G.world.id = newWorldId();
   G.world.name = (nameInput.value || suggestWorldName()).trim() || suggestWorldName();
@@ -216,6 +240,18 @@ export function bindSlider(input, valEl, fmt) {
   const update = () => { valEl.textContent = fmt(input.value); };
   input.addEventListener("input", update);
   update();
+}
+
+// Drive a slider's bounds + initial value from GD.sliders[key] (content pack =
+// single source of truth), leaving the HTML attrs as fallbacks. No-op if the
+// element or the data entry is missing.
+export function applySliderAttrs(input, key) {
+  const s = GD.sliders && GD.sliders[key];
+  if (!input || !s) return;
+  if (s.min != null) input.min = String(s.min);
+  if (s.max != null) input.max = String(s.max);
+  if (s.step != null) input.step = String(s.step);
+  if (s.default != null) input.value = String(s.default);
 }
 
 export function wireUi() {
@@ -239,6 +275,30 @@ export function wireUi() {
   bindSlider(ui.rockDensity, ui.rockDensityVal, (v) => `${v}%`);
   bindSlider(ui.rockCluster, ui.rockClusterVal, (v) => `${v}%`);
   bindSlider(ui.mineral, ui.mineralVal, (v) => `${v}%`);
+
+  // Ambient and weather sliders: pull their min/max/step/value from GD.sliders
+  // (single source of truth, same as the size slider above) then bind the live
+  // value label. Old HTML attrs are sensible fallbacks if a key is missing.
+  applySliderAttrs(ui.bugs, "bugs");
+  applySliderAttrs(ui.birds, "birds");
+  applySliderAttrs(ui.clouds, "clouds");
+  applySliderAttrs(ui.weatherFreq, "weatherFreq");
+  applySliderAttrs(ui.dayMinutes, "dayMinutes");
+  applySliderAttrs(ui.rainIntensity, "rainIntensity");
+  applySliderAttrs(ui.weightClear, "weightClear");
+  applySliderAttrs(ui.weightCloudy, "weightCloudy");
+  applySliderAttrs(ui.weightRain, "weightRain");
+  applySliderAttrs(ui.weightStorm, "weightStorm");
+  bindSlider(ui.bugs, ui.bugsVal, (v) => `${v}`);
+  bindSlider(ui.birds, ui.birdsVal, (v) => `${v}`);
+  bindSlider(ui.clouds, ui.cloudsVal, (v) => `${v}`);
+  bindSlider(ui.weatherFreq, ui.weatherFreqVal, (v) => `${Number(v).toFixed(1)} min`);
+  bindSlider(ui.dayMinutes, ui.dayMinutesVal, (v) => `${v} min`);
+  bindSlider(ui.rainIntensity, ui.rainIntensityVal, (v) => `${Number(v).toFixed(1)}x`);
+  bindSlider(ui.weightClear, ui.weightClearVal, (v) => `${v}`);
+  bindSlider(ui.weightCloudy, ui.weightCloudyVal, (v) => `${v}`);
+  bindSlider(ui.weightRain, ui.weightRainVal, (v) => `${v}`);
+  bindSlider(ui.weightStorm, ui.weightStormVal, (v) => `${v}`);
 
   el("tc-seed-random").addEventListener("click", () => { ui.seed.value = randomSeed(); });
   el("tc-generate").addEventListener("click", createWorld);
@@ -457,10 +517,12 @@ export function openOptions() {
   buildAudioRows();
   menuModal.classList.add("hidden");
   optionsModal.classList.remove("hidden");
+  setWorldAudioPaused(false); // un-duck while in options so the volume sliders preview audibly
 }
 export function closeOptions() {
   optionsModal.classList.add("hidden");
   menuModal.classList.remove("hidden"); // back to the hamburger menu
+  setWorldAudioPaused(!G.running);      // restore the paused/playing duck state
 }
 
 // Show/hide the placement hint banner based on buildMode (called each frame).
@@ -682,7 +744,7 @@ function refreshForgePanel(b) {
     r.btn.disabled = n <= 0;
   }
   const busy = !!b.smelt;
-  const status = busy ? "Smelting" : (anyOre(b) ? (b.fuel > 0 ? "Smelting" : "Idle - no fuel") : "Idle - no ore");
+  const status = busy ? "Working" : (anyOre(b) ? (b.fuel > 0 ? "Working" : "Idle - no fuel") : "Idle - no input");
   if (status !== panelState.status) { el("tc-bpanel-status").textContent = status; panelState.status = status; }
 }
 function anyOre(b) { for (const res of forgeOreTypes(b)) if ((b.oreStored[res] | 0) > 0) return true; return false; }

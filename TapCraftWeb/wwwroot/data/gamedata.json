@@ -1,5 +1,5 @@
 {
-  "version": 21,
+  "version": 45,
 
   "tiles": {
     "grass": { "src": "assets/tiles/grass.png" },
@@ -23,7 +23,8 @@
     "iron": { "name": "Iron", "icon": "assets/icons/icon_iron.png", "fuelCost": 2, "smeltTo": "iron_ingot" },
     "gold": { "name": "Gold", "icon": "assets/icons/icon_gold.png", "fuelCost": 1, "smeltTo": "gold_ingot" },
     "iron_ingot": { "name": "Iron Ingot", "icon": "assets/icons/icon_iron_ingot.png" },
-    "gold_ingot": { "name": "Gold Ingot", "icon": "assets/icons/icon_gold_ingot.png" }
+    "gold_ingot": { "name": "Gold Ingot", "icon": "assets/icons/icon_gold_ingot.png", "fuelCost": 2, "smeltTo": "gold_coin", "smeltYield": 20 },
+    "gold_coin": { "name": "Gold Coin", "icon": "assets/icons/icon_gold_coin.png" }
   },
 
   "objects": {
@@ -203,6 +204,20 @@
       },
       "placeableTiles": ["grass", "sand"],
       "buildCost": { "wood": 500, "stone": 250 }
+    },
+    "coinery": {
+      "name": "Coinery",
+      "category": "smelter",
+      "footprint": { "w": 2, "h": 2 },
+      "sprites": {
+        "SE": "assets/buildings/coinery_se.png",
+        "SW": "assets/buildings/coinery_sw.png"
+      },
+      "placeableTiles": ["grass", "sand"],
+      "buildCost": { "wood": 500, "stone": 250 },
+      "baseSmeltMs": 30000,
+      "fuelResource": "wood",
+      "smelts": ["gold_ingot"]
     }
   },
 
@@ -237,10 +252,61 @@
     }
   },
 
+  "ambient": {
+    "clouds": { "count": 22, "minCells": 4, "maxCells": 9, "cluster": 0.55, "speed": 14, "alpha": 0.225, "windSwitchMs": 300000, "windVaryDeg": 70, "windTurnSpeed": 6 },
+    "birds":  { "max": 5, "spawnChancePerSec": 0.25, "minSpeed": 55, "maxSpeed": 105, "wingMs": 240, "size": 8, "flock": [1, 3] },
+    "bugs":   { "count": 16, "swarms": 3, "swarmSpeed": 12, "attract": 2.5, "jitter": 110, "maxSpeed": 36, "pxSize": 2, "trail": 18, "wanderMs": [700, 1800] },
+    "moonlight": { "count": 12, "nightColor": [120, 165, 255], "dayColor": [255, 205, 120], "alpha": 0.16, "shimmerSpeed": 0.0006, "minLen": 2.5, "maxLen": 5, "minWidth": 0.3, "maxWidth": 0.6, "poolTiles": 2.5, "driftDeg": 200, "driftSpeed": 6 }
+  },
+
+  "weather": {
+    "changeMinMs": 90000,
+    "changeMaxMs": 240000,
+    "easeMs": 16000,
+    "states": [
+      { "kind": "clear",  "weight": 6, "cloud": 0.12, "rain": 0.0 },
+      { "kind": "cloudy", "weight": 3, "cloud": 0.8,  "rain": 0.0 },
+      { "kind": "rain",   "weight": 2, "cloud": 1.0,  "rain": 0.52 },
+      { "kind": "storm",  "weight": 1, "cloud": 1.0,  "rain": 0.8 }
+    ],
+    "cloudDim": 0.16,
+    "rainDim": 0.18,
+    "maxDim": 0.42,
+    "birdDuck": 0.6,
+    "lightning": {
+      "strikeGapMinMs": 2500, "strikeGapMaxMs": 9000,
+      "flashMinMs": 240, "flashMaxMs": 520, "peakMin": 0.45, "peakMax": 0.95, "flashSpread": 1.7,
+      "maxDelayMs": 1600, "minVol": 0.25, "maxVol": 1.0
+    },
+    "rain": {
+      "color": [165, 190, 230], "alpha": 0.28, "drops": 880, "speed": 1500, "slant": -0.22, "length": 20,
+      "splashRate": 52, "splashMs": 430, "splashColor": [205, 225, 250]
+    }
+  },
+
+  "daynight": {
+    "cycleMs": 960000,
+    "nightShadowMul": 0.4,
+    "tint": [
+      { "at": 0.00, "r": 40,  "g": 55,  "b": 118, "a": 0.74 },
+      { "at": 0.20, "r": 44,  "g": 58,  "b": 114, "a": 0.70 },
+      { "at": 0.25, "r": 255, "g": 150, "b": 80,  "a": 0.22 },
+      { "at": 0.31, "r": 255, "g": 224, "b": 178, "a": 0.05 },
+      { "at": 0.50, "r": 255, "g": 248, "b": 224, "a": 0.00 },
+      { "at": 0.69, "r": 255, "g": 226, "b": 176, "a": 0.06 },
+      { "at": 0.75, "r": 255, "g": 132, "b": 70,  "a": 0.24 },
+      { "at": 0.82, "r": 38,  "g": 52,  "b": 116, "a": 0.71 },
+      { "at": 1.00, "r": 40,  "g": 55,  "b": 118, "a": 0.74 }
+    ]
+  },
+
   "defaults": {
     "worldSettings": {
       "landFraction": 0.55, "growthRate": 1.0, "forestDensity": 0.4,
-      "cluster": 0.6, "rockDensity": 0.4, "rockCluster": 0.6, "mineral": 0.4
+      "cluster": 0.6, "rockDensity": 0.4, "rockCluster": 0.6, "mineral": 0.4,
+      "bugs": 16, "birds": 5, "cloudCount": 22, "weatherFreq": 2.5,
+      "dayMinutes": 16, "rainIntensity": 1.0,
+      "weights": { "clear": 6, "cloudy": 3, "rain": 2, "storm": 1 }
     },
     "menuForestDensity": 0.5
   },
@@ -253,7 +319,17 @@
     "cluster":     { "min": 0,   "max": 100, "step": 1,   "default": 60 },
     "rockDensity": { "min": 0,   "max": 100, "step": 1,   "default": 40 },
     "rockCluster": { "min": 0,   "max": 100, "step": 1,   "default": 60 },
-    "mineral":     { "min": 0,   "max": 100, "step": 1,   "default": 40 }
+    "mineral":     { "min": 0,   "max": 100, "step": 1,   "default": 40 },
+    "bugs":        { "min": 0,   "max": 40,  "step": 1,   "default": 16 },
+    "birds":       { "min": 0,   "max": 15,  "step": 1,   "default": 5  },
+    "clouds":      { "min": 0,   "max": 40,  "step": 1,   "default": 22 },
+    "weatherFreq": { "min": 0.5, "max": 10,  "step": 0.5, "default": 2.5 },
+    "dayMinutes":  { "min": 4,   "max": 40,  "step": 1,   "default": 16 },
+    "rainIntensity": { "min": 0.3, "max": 2, "step": 0.1, "default": 1 },
+    "weightClear":  { "min": 0,  "max": 10,  "step": 1,   "default": 6 },
+    "weightCloudy": { "min": 0,  "max": 10,  "step": 1,   "default": 3 },
+    "weightRain":   { "min": 0,  "max": 10,  "step": 1,   "default": 2 },
+    "weightStorm":  { "min": 0,  "max": 10,  "step": 1,   "default": 1 }
   },
 
   "sounds": {
@@ -264,7 +340,8 @@
       "day": ["assets/sounds/ambience_daytime_1.ogg", "assets/sounds/ambience_daytime_2.ogg"],
       "night": ["assets/sounds/ambience_nighttime_1.ogg"],
       "crossfadeMs": 4000,
-      "trackHoldMs": 30000
+      "trackHoldMs": 30000,
+      "modeFadeMs": 9000
     },
     "overlays": {
       "rain": { "src": "assets/sounds/ambience_overlay_rain_1.ogg", "loop": true, "channel": "ambience" },
@@ -272,8 +349,18 @@
         "srcs": ["assets/sounds/ambience_overlay_wind_1.ogg", "assets/sounds/ambience_overlay_wind_2.ogg"],
         "channel": "ambience",
         "gapMinMs": 12000,
-        "gapMaxMs": 30000
+        "gapMaxMs": 30000,
+        "fadeMs": 1800
       }
+    },
+    "thunder": {
+      "channel": "ambience",
+      "clips": [
+        { "src": "assets/sounds/ambience_overlay_thunder_1.mp3", "level": 0.95 },
+        { "src": "assets/sounds/ambience_overlay_thunder_2.mp3", "level": 1.0 },
+        { "src": "assets/sounds/ambience_overlay_thunder_3.mp3", "level": 0.75 },
+        { "src": "assets/sounds/ambience_overlay_thunder_4.mp3", "level": 0.85 }
+      ]
     },
     "effects": {
       "hit_wood": [

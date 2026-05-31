@@ -114,12 +114,12 @@ export function saveWorld() {
       cam: { x: G.cam.x, y: G.cam.y, zoom: G.cam.zoom },
       mods: Array.from(G.world.mods.entries()),
       wood: G.world.wood, stone: G.world.stone, iron: G.world.iron, gold: G.world.gold,
-      iron_ingot: G.world.iron_ingot, gold_ingot: G.world.gold_ingot,
+      iron_ingot: G.world.iron_ingot, gold_ingot: G.world.gold_ingot, gold_coin: G.world.gold_coin,
       tools: G.world.tools, craft: G.world.craft,
       buildings: G.world.buildings.map((b) => ({ id: b.id, type: b.type, col: b.col, row: b.row, facing: b.facing,
         produced: b.produced, stored: b.stored, tools: b.tools, oreStored: b.oreStored, ingots: b.ingots, fuel: b.fuel })),
       drops: G.drops.filter((d) => d.phase === "rest").map((d) => ({ kind: d.kind, gx: d.gx, gy: d.gy })),
-      tick: G.world.tick, running: G.running,
+      timeOfDay: G.world.timeOfDay, tick: G.world.tick, running: G.running,
     }));
     localStorage.setItem(CURRENT_KEY, G.world.id);
     const list = readWorldsIndex();
@@ -159,10 +159,12 @@ export function loadWorld(id) {
     G.world.gold = d.gold | 0;
     G.world.iron_ingot = d.iron_ingot | 0;
     G.world.gold_ingot = d.gold_ingot | 0;
+    G.world.gold_coin = d.gold_coin | 0;
     G.world.tools = sanitizeTools(d.tools);
     G.world.craft = sanitizeCraft(d.craft);
     G.world.buildings = sanitizeBuildings(d.buildings);
     G.world.tick = d.tick || 0;
+    G.world.timeOfDay = (typeof d.timeOfDay === "number") ? d.timeOfDay : 0.3;
     resetTransients(); // also clears building worker/selection transients
     const savedDrops = Array.isArray(d.drops) ? d.drops : (Array.isArray(d.logs) ? d.logs.map((p) => ({ kind: "wood", gx: p.gx, gy: p.gy })) : []);
     G.drops = savedDrops.map((p) => ({ kind: p.kind || "wood", gx: p.gx, gy: p.gy, vx: 0, vy: 0, z: 0, vz: 0, phase: "rest" }));

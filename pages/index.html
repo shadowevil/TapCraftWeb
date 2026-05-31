@@ -54,6 +54,10 @@
         <img id="tc-gold_ingot-icon" src="assets/icons/icon_gold_ingot.png" alt="Gold Ingot" />
         <span id="tc-gold_ingot-count">0</span>
     </div>
+    <div class="tc-resource" title="Gold Coin">
+        <img id="tc-gold_coin-icon" src="assets/icons/icon_gold_coin.png" alt="Gold Coin" />
+        <span id="tc-gold_coin-count">0</span>
+    </div>
 </div>
 
 <div class="tc-playback">
@@ -217,6 +221,49 @@
             <div class="tc-row-head"><label for="tc-mineral">Mineral cluster</label><span id="tc-mineral-val" class="tc-val"></span></div>
             <input id="tc-mineral" class="tc-range" type="range" min="0" max="100" step="1" value="40" />
         </div>
+
+        <p class="tc-sub">Ambient and Weather</p>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-bugs">Bugs</label><span id="tc-bugs-val" class="tc-val"></span></div>
+            <input id="tc-bugs" class="tc-range" type="range" min="0" max="40" step="1" value="16" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-birds">Birds</label><span id="tc-birds-val" class="tc-val"></span></div>
+            <input id="tc-birds" class="tc-range" type="range" min="0" max="15" step="1" value="5" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-clouds">Cloud density</label><span id="tc-clouds-val" class="tc-val"></span></div>
+            <input id="tc-clouds" class="tc-range" type="range" min="0" max="40" step="1" value="22" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-weather-freq">Weather change (avg min)</label><span id="tc-weather-freq-val" class="tc-val"></span></div>
+            <input id="tc-weather-freq" class="tc-range" type="range" min="0.5" max="10" step="0.5" value="2.5" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-day-minutes">Day length (min)</label><span id="tc-day-minutes-val" class="tc-val"></span></div>
+            <input id="tc-day-minutes" class="tc-range" type="range" min="4" max="40" step="1" value="16" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-rain-intensity">Rain and storm intensity</label><span id="tc-rain-intensity-val" class="tc-val"></span></div>
+            <input id="tc-rain-intensity" class="tc-range" type="range" min="0.3" max="2" step="0.1" value="1" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-weight-clear">Clear weight</label><span id="tc-weight-clear-val" class="tc-val"></span></div>
+            <input id="tc-weight-clear" class="tc-range" type="range" min="0" max="10" step="1" value="6" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-weight-cloudy">Cloudy weight</label><span id="tc-weight-cloudy-val" class="tc-val"></span></div>
+            <input id="tc-weight-cloudy" class="tc-range" type="range" min="0" max="10" step="1" value="3" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-weight-rain">Rain weight</label><span id="tc-weight-rain-val" class="tc-val"></span></div>
+            <input id="tc-weight-rain" class="tc-range" type="range" min="0" max="10" step="1" value="2" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-weight-storm">Storm weight</label><span id="tc-weight-storm-val" class="tc-val"></span></div>
+            <input id="tc-weight-storm" class="tc-range" type="range" min="0" max="10" step="1" value="1" />
+        </div>
+
         <div class="tc-row">
             <div class="tc-row-head"><label for="tc-seed">Seed</label></div>
             <div class="tc-seed-row">

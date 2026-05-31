@@ -382,8 +382,9 @@ function updateSmelter(b, dtMs) {
     b.oreStored[res] -= 1;
     b.fuel -= fuelCost;
     const ingot = GD.resources[res].smeltTo;
-    b.ingots[ingot] = (b.ingots[ingot] | 0) + 1;
-    b.produced[ingot] = (b.produced[ingot] | 0) + 1;
+    const yld = GD.resources[res].smeltYield || 1; // output count per input (Coinery mints 20 coins/ingot)
+    b.ingots[ingot] = (b.ingots[ingot] | 0) + yld;
+    b.produced[ingot] = (b.produced[ingot] | 0) + yld;
     b.smelt = null; // pick the next job next tick
   }
 }

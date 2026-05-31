@@ -14,6 +14,9 @@ import { growthStep } from "./rng.js";
 import { visibleCellBounds } from "./iso.js";
 import { stageAt, progressAt, setStage, setProgress, setChop, clampBox } from "./cells.js";
 import { PERF, pBegin, pEnd, pFps } from "./perf.js";
+import { updateAmbient } from "./ambient.js";
+import { updateWeather } from "./weather.js";
+import { updateEnv } from "./env.js";
 import { objectAt, render } from "./render.js";
 import {
   doHarvest, spawnDrop, flushPopDrop, collectDrop,
@@ -22,10 +25,12 @@ import {
 import { advanceCrafting } from "./crafting.js";
 import { updateBuildings } from "./buildings.js";
 import { saveWorld } from "./persistence.js";
+import { setWorldAudioPaused } from "./sound.js";
 
 // --- Simulation -------------------------------------------------------
 export function tick() {
   G.world.tick++;
+  updateEnv(TICK_MS); // advance the day/night cycle (pauses with the game)
   const g0 = pBegin(); growthTick(); pEnd("growth", g0);
   // Buildings harvest on the fixed sim step too, so they pause with the game
   // and stay deterministic. They run for ALL buildings regardless of viewport.
@@ -104,6 +109,7 @@ function growthTick() {
 // Advance pops + drop physics (visual only; real dt, runs even while paused).
 export function updateAnimations(dtMs) {
   const dt = Math.min(0.05, dtMs / 1000);
+  if (G.running) { updateAmbient(dtMs); updateWeather(dtMs); } // decorative FX + weather - frozen while paused (menu preview runs: it sets running=true)
 
   // Hold-to-harvest cadence: bare hands swing every baseSwingMs (slow); holding
   // the matching crafted tool swings at that tool's swingMs (faster). Clicking
@@ -205,6 +211,7 @@ export function frame(t) {
 
 export function setRunning(on) {
   G.running = on;
+  setWorldAudioPaused(!on); // pause/play also ducks the world + ambient sound (music stays)
   updatePlayPause();
   saveWorld();
 }

@@ -22,6 +22,9 @@ import { canPlaceFootprint, canAffordBuilding, buildingTargets, cellsInRange, hu
 import { mineableAt, mineableSprite } from "./mineable.js";
 import { tileAt, stageAt, progressAt, chopAt, rockRawAt, baseCacheSize } from "./cells.js";
 import { PERF, pBegin, pEnd, pCount } from "./perf.js";
+import { renderAmbient, ambientCounts } from "./ambient.js";
+import { envTint, shadowMul, weatherDim, weatherCloud, weatherRain, weatherKind } from "./env.js";
+import { renderRain, renderLightning, activeSplashes, drawSplash } from "./weather.js";
 import { positionBuildingPanel, updateBuildHint } from "./ui.js";
 
 // Sprite + placement for a plant cell (shared by render and hit-testing so
@@ -173,7 +176,7 @@ export function drawShadowRect(img, centerX, r, unit, flip) {
     const fx = r.tx + meta.footX * unit;         // screen x of the foot
     const pw = meta.w * 0.9 * unit;              // pool width ~ footprint
     const ph = pw * SHADOW_POOL_RATIO;
-    ctx.globalAlpha = SHADOW_POOL_ALPHA;
+    ctx.globalAlpha = SHADOW_POOL_ALPHA * frameShadowMul;
     ctx.drawImage(G.poolSprite, fx - pw / 2, groundY - ph / 2, pw, ph);
     ctx.globalAlpha = 1;
   }
@@ -182,7 +185,7 @@ export function drawShadowRect(img, centerX, r, unit, flip) {
   //    a=x-scale (flip), b=0, c=horizontal shear, d=vertical squash. Columns
   //    higher up the sprite (more negative local y) lean further left.
   ctx.save();
-  ctx.globalAlpha = SHADOW_ALPHA;
+  ctx.globalAlpha = SHADOW_ALPHA * frameShadowMul;
   ctx.translate(centerX, groundY);
   ctx.transform(flip ? -1 : 1, 0, SHADOW_SKEW, SHADOW_SQUASH, 0, 0);
   ctx.drawImage(sh, -r.dw / 2, -footRows * unit, r.dw, r.dh);
@@ -350,6 +353,7 @@ function drawSmokeFrame(img, cx, baseY, unit, alpha) {
 // re-rendered when its signature changes. The offscreen canvas mirrors the main
 // canvas backing + DPR transform so the blit is a 1:1 device-pixel copy.
 let floorCanvas = null, floorCtx = null, floorKey = "";
+let frameShadowMul = 1; // object-shadow alpha multiplier for this frame (day/night)
 function ensureFloorCanvas() {
   if (!floorCanvas) { floorCanvas = document.createElement("canvas"); floorCtx = floorCanvas.getContext("2d"); }
   if (floorCanvas.width !== canvas.width || floorCanvas.height !== canvas.height) {
@@ -378,6 +382,7 @@ export function render() {
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
   if (!G.hasWorld) { G.hover = null; G.hoverTile = null; G.showHatchet = false; G.showPickaxe = false; canvas.style.cursor = "default"; return; }
+  frameShadowMul = shadowMul(); // day/night dims object shadows (faint at night)
   const active = !G.inMenu && G.mouse.on;
   const _h0 = pBegin();
   G.hover = active ? objectAt(G.mouse.x, G.mouse.y) : null;
@@ -446,9 +451,16 @@ export function render() {
   for (const bd of G.world.buildings) {
     entities.push({ depth: (bd.row + 1) + (bd.col + 1), col: bd.col + 1, bd, kind: "bld" });
   }
+  // Rain ground-splashes: injected at their tile's depth so nearer objects paint
+  // over them (a splash never appears on top of a tree/rock - keeps the iso layering).
+  for (const sp of activeSplashes()) {
+    if (sp.c < b.c0 || sp.c > b.c1 || sp.r < b.r0 || sp.r > b.r1) continue;
+    entities.push({ depth: sp.r + sp.c, col: sp.c, c: sp.c, r: sp.r, sp, kind: "splash" });
+  }
   entities.sort((a, e) => (a.depth - e.depth) || (a.col - e.col) || (a.kind === "bld" ? -1 : 1));
   for (const e of entities) {
     if (e.kind === "bld") drawBuildingEntity(e.bd, z);
+    else if (e.kind === "splash") drawSplash(e.c, e.r, e.sp, z);
     else drawCellObject(e.c, e.r, z, activeCell, e.obj);
   }
   pCount("entities", entities.length);
@@ -466,7 +478,7 @@ export function render() {
     const sp = dropScreen(d);
     if (img._shadow) {
       ctx.save();
-      ctx.globalAlpha = SHADOW_ALPHA;
+      ctx.globalAlpha = SHADOW_ALPHA * frameShadowMul;
       ctx.translate(sp.x, sp.y); // base of the drop
       ctx.transform(1, 0, SHADOW_SKEW, SHADOW_SQUASH, 0, 0);
       ctx.drawImage(img._shadow, -lw / 2, -lh, lw, lh);
@@ -475,6 +487,9 @@ export function render() {
     }
     ctx.drawImage(img, sp.x - lw / 2, sp.y - lh, lw, lh);
   }
+
+  // Day/night + weather tint over the world (under the UI highlights / ambient FX).
+  applyEnvTint();
 
   // Selected building: highlight its in-range eligible targets so the player
   // can see what it will harvest.
@@ -523,6 +538,14 @@ export function render() {
     }
   }
 
+  // Ambient cosmetic FX (cloud shadows, birds, bugs) over the world.
+  renderAmbient();
+
+  // Falling rain: a screen-space foreground layer, in front of everything.
+  renderRain();
+  // Lightning flashes (storm) on top of the rain.
+  renderLightning();
+
   // Dev cell inspector (console: debugoverlay true).
   if (G.debugOverlay) drawDebugOverlay(z);
 
@@ -531,6 +554,36 @@ export function render() {
   positionBuildingPanel();
   updateBuildHint();
   pEnd("overlay", _o0);
+}
+
+// Day/night + weather scene tint: one translucent rect over the whole viewport,
+// drawn over the world (the cached floor + entities) but under UI highlights/FX.
+function applyEnvTint() {
+  // Not on the main-menu preview: the day/night tint is a gameplay effect, and a
+  // multiply rect over the menu's (intentionally transparent) canvas regions would
+  // paint them opaque and hide the CSS gradient behind the canvas.
+  if (G.inMenu) return;
+  const tint = envTint();
+  const ta = tint ? tint.a : 0;
+  const wdim = weatherDim(); // extra darkening from overcast/rain (any time of day)
+  if (ta <= 0.003 && wdim <= 0.003) return;
+  // Composite with "multiply", not a plain translucent rect. A semi-opaque sheet
+  // lifts the blacks toward its own color (a flat hazy wash); multiplying by a
+  // light color instead scales every pixel DOWN toward that color - true darkening,
+  // and the blue night cast comes through cleanly. The day/night tint alpha is
+  // folded into the color by pre-blending toward white (a=0 -> white -> identity);
+  // the weather dim then scales the whole light color down (overcast = dimmer).
+  let r = 255, g = 255, b = 255;
+  if (tint && ta > 0) {
+    const inv = 1 - ta;
+    r = 255 * inv + tint.r * ta; g = 255 * inv + tint.g * ta; b = 255 * inv + tint.b * ta;
+  }
+  if (wdim > 0) { const f = 1 - wdim; r *= f; g *= f; b *= f; }
+  ctx.save();
+  ctx.globalCompositeOperation = "multiply";
+  ctx.fillStyle = "rgb(" + Math.round(r) + ", " + Math.round(g) + ", " + Math.round(b) + ")";
+  ctx.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+  ctx.restore();
 }
 
 // --- Dev: live cell inspector overlay --------------------------------
@@ -592,6 +645,15 @@ function drawDebugOverlay(z) {
   }
   lines.push("cells " + (PERF.count.cells || 0) + "  entities " + (PERF.count.entities || 0));
   lines.push("baseCache " + baseCacheSize() + "  mods " + G.world.mods.size);
+  const ac = ambientCounts();
+  lines.push("ambient  clouds " + ac.clouds + " swarms " + ac.swarms + " bugs " + ac.bugs + " birds " + ac.birds + " beams " + ac.beams);
+  const tod = G.world.timeOfDay || 0, hh = Math.floor(tod * 24), mm = Math.floor((tod * 24 - hh) * 60);
+  const phase = (tod < 0.21 || tod >= 0.79) ? "Night" : (tod < 0.31 ? "Dawn" : (tod < 0.69 ? "Day" : "Dusk"));
+  const tn = envTint();
+  lines.push("env  " + (hh < 10 ? "0" + hh : hh) + ":" + (mm < 10 ? "0" + mm : mm) + " " + phase +
+    "  t=" + tod.toFixed(3) + "  shadow " + shadowMul().toFixed(2) + "  dim " + (tn ? Math.round(tn.a * 100) : 0) + "%");
+  lines.push("weather  " + weatherKind() + "  cloud " + Math.round(weatherCloud() * 100) + "%  rain " +
+    Math.round(weatherRain() * 100) + "%  wdim " + Math.round(weatherDim() * 100) + "%");
   // Text panel, top-left, fixed (screen). Start it BELOW the crafted-tools HUD
   // (which also floats top-left and can wrap to multiple rows) so they never
   // overlap. Coords are canvas-relative; the HUD/canvas rects convert for us.

@@ -92,6 +92,20 @@ export function sharpnessMult(sharpness, toughness) {
   return 1;
 }
 
+// Drop-chance multiplier for an actual swing, accounting for bare hands. A TOOL
+// uses the normal sharpness-vs-toughness curve. BARE HANDS, however, can only
+// harvest objects no tougher than bare-hand sharpness (wood/stone, toughness 1) -
+// ore veins (toughness 2+) always need a tool, even though a stone tool shares the
+// same sharpness number. Returns 0 (fail) for too-tough-for-hands.
+export function effectiveMult(toolId, sharpness, toughness) {
+  const h = GD.harvest;
+  if (!toolId) {
+    if ((toughness | 0) > (h.baseSharpness | 0)) return 0; // hands can't work ore veins
+    return sharpnessMult(h.baseSharpness | 0, toughness);
+  }
+  return sharpnessMult(sharpness, toughness);
+}
+
 // One harvest swing's yield for an object kind (pure: no durability side effect -
 // the caller spends it). `toolId` is the specific tool used (null = bare hands).
 // The chance is scaled by tool sharpness vs object toughness, and is zero when
@@ -99,7 +113,7 @@ export function sharpnessMult(sharpness, toughness) {
 export function harvestRoll(objKind, toolId, sharpness) {
   const h = GD.harvest;
   const toughness = GD.objects[objKind].toughness || 1;
-  const mult = sharpnessMult(toolId ? sharpness : (h.baseSharpness | 0), toughness);
+  const mult = effectiveMult(toolId, sharpness, toughness);
   if (mult <= 0) return 0; // too tough for this tool/hands
   if (toolId) {
     const tool = GD.tools[toolId];
@@ -184,9 +198,11 @@ export function harvestMineable(col, row, opts) {
   const { toolId, sharpness } = resolveTooled(m.typeId, opts);
   // Too tough for the tool at all? Tell the player (manual strikes only, so a
   // mining hut on gold does not spam the event log).
-  if (sharpnessMult(toolId ? sharpness : (GD.harvest.baseSharpness | 0), def.toughness || 1) <= 0
+  if (effectiveMult(toolId, sharpness, def.toughness || 1) <= 0
       && !(opts && opts.building)) {
-    postEvent("Your tool is too weak to mine " + (GD.resources[def.drop] ? GD.resources[def.drop].name : def.drop) + ".");
+    const what = GD.resources[def.drop] ? GD.resources[def.drop].name : def.drop;
+    postEvent(toolId ? ("Your tool is too weak to mine " + what + ".")
+                     : ("You need a pickaxe to mine " + what + "."));
   }
   const dropCount = harvestRoll(m.typeId, toolId, sharpness);
   // noDrops (building harvest): bounce/sound only, no physical drops.

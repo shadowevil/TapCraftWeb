@@ -1,0 +1,475 @@
+// TapCraft - ambient cosmetic FX: drifting cloud shadows, birds, and bugs.
+// PURELY decorative - no gameplay effect, no world interaction. Counts/speeds are
+// data-tuned via GD.ambient.
+//
+// Everything is WORLD-ANCHORED (positioned in world coords, drawn via worldToScreen)
+// so it scrolls with the terrain as you pan; items DESPAWN/recycle once they leave
+// the viewport (+margin), with fresh ones in view. Clouds + birds scale with the map
+// (size x camera zoom). BUGS are always 1px (true bug-sized at any zoom).
+//
+// Bugs use a loose ATTRACTANT model: a few "swarm" centers wander but steer back
+// toward LAND; each bug is independently pulled toward its swarm center (a damped
+// spring) plus its own random jitter, with per-bug variation - so they mill about
+// non-uniformly inside a general cluster, each leaving a gentle fading pixel trail.
+"use strict";
+
+import { G } from "./state.js";
+import { GD } from "./gamedata.js";
+import { HALF_W, HALF_H, SHADOW_SKEW, SHADOW_SQUASH } from "./config.js";
+import { canvas, ctx } from "./dom.js";
+import { screenToWorld, worldToScreen, worldToCell, cellCenter } from "./iso.js";
+import { tileAt } from "./cells.js";
+import { dayAmount, weatherCloud, weatherRain } from "./env.js";
+
+let clouds = [], birds = [], swarms = [], moonbeams = [], inited = false;
+let cloudField = []; // [{ccol,crow,r}] rebuilt each updateAmbient - fast cloud-coverage queries (rain)
+let windAng = 0, windTarget = 0, windTimer = 0; // shared cloud wind, EASED toward windTarget; re-rolled on a timer
+
+const OFFSCREEN_M = 120;       // despawn margin (screen px) beyond the viewport
+const DEFAULT_WIND_SWITCH = 300000; // 5 min between wind-direction changes
+const BUG_SPAWN_R = 26;  // initial bug scatter around its swarm (world px)
+
+// RGB triplets (alpha applied per draw, so head + trail can fade independently).
+const BUG_COLORS = [
+  "255, 246, 205", // pale yellow
+  "255, 222, 178", // peach
+  "200, 240, 255", // pale blue
+  "200, 255, 205", // pale green
+];
+
+const W = () => canvas.clientWidth || 1;
+const H = () => canvas.clientHeight || 1;
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = (arr, i, d) => (Array.isArray(arr) ? arr[i] : (arr != null ? arr : d));
+
+// Per-world override reader: returns G.world.settings[key] when present (a real
+// number), otherwise the supplied fallback. Guards undefined settings (the menu-
+// preview world / very old saves) so ambient FX always have a count to target.
+function wsNum(key, fallback) {
+  const s = G.world && G.world.settings;
+  const v = s ? s[key] : undefined;
+  return (typeof v === "number" && isFinite(v)) ? v : fallback;
+}
+// Total target bug population for this world (per-world override or data default).
+function bugTotal() { return wsNum("bugs", (GD.ambient.bugs && GD.ambient.bugs.count) | 0); }
+// Cloud-count budget (per-world override or data default).
+function cloudBudget() { return wsNum("cloudCount", (GD.ambient.clouds && GD.ambient.clouds.count) || 5); }
+// Bird population cap (per-world override or data default).
+function birdMax() { return wsNum("birds", (GD.ambient.birds && GD.ambient.birds.max) | 0); }
+
+function nearLand(col, row) {
+  for (let dr = -2; dr <= 2; dr++) {
+    for (let dc = -2; dc <= 2; dc++) {
+      if (tileAt(col + dc, row + dr) !== "water") return true;
+    }
+  }
+  return false;
+}
+function landSpawnWorld() {
+  const w = W(), h = H();
+  for (let i = 0; i < 40; i++) {
+    const wpt = screenToWorld(rand(w * 0.12, w * 0.88), rand(h * 0.12, h * 0.88));
+    const cell = worldToCell(wpt.x, wpt.y);
+    if (nearLand(cell.col, cell.row)) return { wx: wpt.x, wy: wpt.y };
+  }
+  return null;
+}
+function offscreen(wx, wy, m) {
+  const s = worldToScreen(wx, wy), mm = m || OFFSCREEN_M;
+  return s.x < -mm || s.x > W() + mm || s.y < -mm || s.y > H() + mm;
+}
+
+// --- Clouds (world-anchored shadow drawn as darkened iso TILES) ------
+function newCloud(inView) {
+  const a = GD.ambient.clouds;
+  const rCells = rand(a.minCells, a.maxCells);     // radius in cells (tile footprint)
+  const speed = a.speed * rand(0.6, 1.4);          // per-cloud speed; direction is the shared wind
+  const c = {
+    wx: 0, wy: 0, speed, vx: Math.cos(windAng) * speed, vy: Math.sin(windAng) * speed, rCells,
+    alpha: a.alpha * rand(0.55, 1.45),             // per-cloud opacity varies a lot
+    phase: rand(0, Math.PI * 2), phase2: rand(0, Math.PI * 2), // lumpy outline
+  };
+  const cluster = a.cluster || 0;
+  if (cluster > 0 && clouds.length && Math.random() < cluster) {
+    // Clustering: drop this cloud near an existing one so they clump into groups
+    // (same sizes, just grouped) instead of spreading evenly.
+    const base = clouds[(Math.random() * clouds.length) | 0];
+    const spread = (a.minCells + rCells) * 2 * HALF_W; // a couple cloud-radii in world px
+    c.wx = base.wx + rand(-spread, spread);
+    c.wy = base.wy + rand(-spread, spread);
+  } else if (inView) {
+    const wpt = screenToWorld(rand(0, W()), rand(0, H())); c.wx = wpt.x; c.wy = wpt.y;
+  } else {
+    recycleCloud(c);
+  }
+  return c;
+}
+function cloudMargin(c) { return c.rCells * 2 * HALF_W * G.cam.zoom + 24; }
+function recycleCloud(c) {
+  const m = cloudMargin(c), w = W(), h = H();
+  let sx, sy;
+  if (Math.abs(c.vx) >= Math.abs(c.vy)) { sx = c.vx >= 0 ? -m : w + m; sy = rand(-m * 0.2, h + m * 0.2); }
+  else { sy = c.vy >= 0 ? -m : h + m; sx = rand(-m * 0.2, w + m * 0.2); }
+  const wpt = screenToWorld(sx, sy); c.wx = wpt.x; c.wy = wpt.y;
+}
+
+// Cloud coverage (0..1) at a WORLD point - used by the rain so it only falls under
+// clouds. Approximates each cloud as a disc in cell space (the base radius, ignoring
+// the lumpy outline) and returns the strongest overlap. Cheap (a handful of clouds).
+export function cloudShadowAt(wx, wy) {
+  if (!cloudField.length) return 0;
+  const fcol = wx / (2 * HALF_W) + wy / (2 * HALF_H);
+  const frow = wy / (2 * HALF_H) - wx / (2 * HALF_W);
+  let cover = 0;
+  for (const f of cloudField) {
+    const dx = fcol - f.ccol, dy = frow - f.crow, d2 = dx * dx + dy * dy;
+    if (d2 >= f.r * f.r) continue;                 // squared-distance early-out (no sqrt)
+    const v = 1 - Math.sqrt(d2) / f.r;
+    if (v > cover) cover = v;
+  }
+  return cover;
+}
+// Snapshot cloud cell-centers once per frame so the per-drop coverage query above
+// doesn't recompute them ~900x. Rebuilt in updateAmbient after the clouds move.
+function rebuildCloudField() {
+  cloudField.length = 0;
+  for (const c of clouds) {
+    cloudField.push({ ccol: c.wx / (2 * HALF_W) + c.wy / (2 * HALF_H), crow: c.wy / (2 * HALF_H) - c.wx / (2 * HALF_W), r: c.rCells });
+  }
+}
+
+// Pick a random cloud currently in view (for a lightning strike). Returns its world
+// position + cell radius, or null if none on screen.
+export function randomCloudInView() {
+  if (!clouds.length) return null;
+  const inview = [];
+  for (const c of clouds) if (!offscreen(c.wx, c.wy, 0)) inview.push(c);
+  const pool = inview.length ? inview : clouds;
+  const c = pool[(Math.random() * pool.length) | 0];
+  return { wx: c.wx, wy: c.wy, r: c.rCells, phase: c.phase, phase2: c.phase2 };
+}
+
+// --- Moonlight / sun beams (world-anchored shafts that LAND on land tiles) ---
+// Each beam is a short shaft slanting in from the top-right (the object-shadow
+// angle) onto a single tile, with a soft pool brightening that tile. They all
+// DRIFT in one shared direction (like the clouds), as if the moon/sun were moving
+// across the sky, and recycle at the upwind edge. Over water they draw nothing.
+function landTileWorld() {
+  const w = W(), h = H();
+  for (let i = 0; i < 30; i++) {
+    const wpt = screenToWorld(rand(w * 0.05, w * 0.95), rand(h * 0.05, h * 0.95));
+    const cell = worldToCell(wpt.x, wpt.y);
+    if (tileAt(cell.col, cell.row) !== "water") { const cc = cellCenter(cell.col, cell.row); return { wx: cc.x, wy: cc.y }; }
+  }
+  return null;
+}
+function newMoonbeam(inView) {
+  const m = GD.ambient.moonlight;
+  const driftAng = ((m.driftDeg != null ? m.driftDeg : 200) * Math.PI) / 180;
+  const sp = (m.driftSpeed != null ? m.driftSpeed : 5);
+  const b = {
+    wx: 0, wy: 0,
+    vx: Math.cos(driftAng) * sp, vy: Math.sin(driftAng) * sp,   // shared steady drift (sun/moon motion)
+    len: rand(m.minLen || 2.5, m.maxLen || 5),                  // shaft length (tiles)
+    width: rand(m.minWidth || 0.3, m.maxWidth || 0.6),          // beam thickness (tile-half-widths)
+    aScale: rand(0.7, 1.25),
+    phase: rand(0, Math.PI * 2),
+    phaseSpeed: (m.shimmerSpeed || 0.0006) * rand(0.7, 1.3),
+  };
+  if (inView) { const p = landTileWorld(); if (p) { b.wx = p.wx; b.wy = p.wy; } else { const w = screenToWorld(rand(0, W()), rand(0, H())); b.wx = w.x; b.wy = w.y; } }
+  else recycleMoonbeam(b);
+  return b;
+}
+function beamMargin(b) {
+  const m = GD.ambient.moonlight, pool = (m && m.poolTiles != null ? m.poolTiles : 2.5) * 2 * HALF_W;
+  return (b.len * 2 * HALF_H + pool) * G.cam.zoom + 24; // cover the shaft + the pool radius so the glow never pops at the edge
+}
+function recycleMoonbeam(b) {
+  const m = beamMargin(b), w = W(), h = H();
+  let sx, sy;
+  if (Math.abs(b.vx) >= Math.abs(b.vy)) { sx = b.vx >= 0 ? -m : w + m; sy = rand(-m * 0.2, h + m * 0.2); }
+  else { sy = b.vy >= 0 ? -m : h + m; sx = rand(-m * 0.2, w + m * 0.2); }
+  const wpt = screenToWorld(sx, sy); b.wx = wpt.x; b.wy = wpt.y;
+}
+
+// --- Bugs (world-anchored attractant; always 1px) --------------------
+function newBug(s) {
+  const a = GD.ambient.bugs;
+  return {
+    wx: s.wx + rand(-BUG_SPAWN_R, BUG_SPAWN_R), wy: s.wy + rand(-BUG_SPAWN_R, BUG_SPAWN_R), vx: 0, vy: 0,
+    k: (a.attract || 5) * rand(0.55, 1.5),     // per-bug attraction (varied -> non-uniform)
+    jit: (a.jitter || 120) * rand(0.6, 1.4),   // per-bug wander
+    maxSp: (a.maxSpeed || 40) * rand(0.65, 1.25),
+    rgb: BUG_COLORS[(Math.random() * BUG_COLORS.length) | 0],
+    trail: [], lwx: 1e9, lwy: 1e9,             // recent WORLD path points (the stream)
+  };
+}
+function newSwarm() {
+  const a = GD.ambient.bugs, p = landSpawnWorld();
+  if (!p) return null; // no land in view -> no swarm (no bugs over open ocean)
+  const s = { wx: p.wx, wy: p.wy, ang: rand(0, Math.PI * 2),
+    sp: (a.swarmSpeed || 12) * rand(0.6, 1.4), t: 0,
+    next: rand(pick(a.wanderMs, 0, 700), pick(a.wanderMs, 1, 1800)),
+    homeWX: p.wx, homeWY: p.wy, onLand: true, bugs: [] };
+  const per = Math.max(1, Math.round(bugTotal() / Math.max(1, (a.swarms | 0) || 1)));
+  for (let i = 0; i < per; i++) s.bugs.push(newBug(s));
+  return s;
+}
+
+// --- Birds (world-anchored, scale with zoom) -------------------------
+function spawnBirdFlock() {
+  const a = GD.ambient.birds, w = W(), h = H();
+  const fromLeft = Math.random() < 0.5;
+  const sp = rand(a.minSpeed, a.maxSpeed) * (fromLeft ? 1 : -1); // world px/s
+  const edgeX = fromLeft ? -20 : w + 20, baseY = rand(h * 0.08, h * 0.55);
+  const n = Math.round(rand(pick(a.flock, 0, 1), pick(a.flock, 1, 3)));
+  const max = birdMax();
+  for (let i = 0; i < n && birds.length < max; i++) {
+    const wpt = screenToWorld(edgeX - i * 26 * Math.sign(sp), baseY + rand(-18, 18));
+    birds.push({ wx: wpt.x, wy: wpt.y, vx: sp * rand(0.9, 1.1), bob: rand(6, 16),
+      bobMs: rand(900, 1500), phase: rand(0, 1000), flap: rand(0, 1000), size: a.size * rand(0.85, 1.25) });
+  }
+}
+
+function initAmbient() {
+  inited = true; clouds = []; birds = []; swarms = []; moonbeams = [];
+  const a = GD.ambient;
+  windAng = windTarget = rand(0, Math.PI * 2);
+  windTimer = (a.clouds && a.clouds.windSwitchMs) || DEFAULT_WIND_SWITCH;
+  const cloud0 = Math.round(cloudBudget() * weatherCloud()); // start at the weather's coverage
+  for (let i = 0; i < cloud0; i++) clouds.push(newCloud(true));
+  for (let i = 0; i < ((a.moonlight && a.moonlight.count) | 0); i++) moonbeams.push(newMoonbeam(true));
+  const target = Math.max(0, (a.bugs && a.bugs.swarms | 0) || 0);
+  for (let i = 0; i < target; i++) { const s = newSwarm(); if (s) swarms.push(s); }
+}
+
+// --- Update (called every frame, even while paused) -------------------
+function updateBug(b, s, dt) {
+  // Damped spring toward the swarm center + per-bug random jitter (organic mill).
+  b.vx += (s.wx - b.wx) * b.k * dt + rand(-1, 1) * b.jit * dt;
+  b.vy += (s.wy - b.wy) * b.k * dt + rand(-1, 1) * b.jit * dt;
+  b.vx *= 0.9; b.vy *= 0.9;
+  const sp = Math.hypot(b.vx, b.vy);
+  if (sp > b.maxSp) { b.vx = b.vx / sp * b.maxSp; b.vy = b.vy / sp * b.maxSp; }
+  b.wx += b.vx * dt; b.wy += b.vy * dt;
+  const trailLen = (GD.ambient.bugs.trail | 0) || 16;
+  if (Math.abs(b.wx - b.lwx) > 0.4 || Math.abs(b.wy - b.lwy) > 0.4) {
+    b.trail.push(b.wx, b.wy); if (b.trail.length > trailLen * 2) b.trail.splice(0, 2); b.lwx = b.wx; b.lwy = b.wy;
+  }
+}
+
+export function updateAmbient(dtMs) {
+  if (!GD.ambient || !G.hasWorld) return;
+  if (!inited) initAmbient();
+  const dt = Math.min(0.05, dtMs / 1000);
+
+  // Shared wind: all clouds drift one direction, which EASES toward a new random
+  // heading every windSwitchMs (gradual shortest-arc turn - no instant reverses or
+  // hard angles). Each switch nudges the target by at most +-windVaryDeg.
+  const cw = GD.ambient.clouds;
+  windTimer -= dtMs;
+  if (windTimer <= 0) {
+    const vary = ((cw.windVaryDeg || 70) * Math.PI) / 180;
+    windTarget = windAng + rand(-vary, vary);
+    windTimer = cw.windSwitchMs || DEFAULT_WIND_SWITCH;
+  }
+  const maxTurn = ((cw.windTurnSpeed || 6) * Math.PI) / 180 * dt; // radians this frame
+  const diff = Math.atan2(Math.sin(windTarget - windAng), Math.cos(windTarget - windAng));
+  windAng += Math.max(-maxTurn, Math.min(maxTurn, diff));
+  // Cloud coverage tracks the weather: ease the active cloud count toward
+  // base-count x cloud-cover (add fresh ones off-screen; drop off-screen ones first).
+  const coverTarget = Math.round(cloudBudget() * weatherCloud());
+  while (clouds.length < coverTarget) clouds.push(newCloud(false));
+  while (clouds.length > coverTarget) {
+    let idx = clouds.findIndex((c) => offscreen(c.wx, c.wy, cloudMargin(c)));
+    if (idx < 0) idx = clouds.length - 1;
+    clouds.splice(idx, 1);
+  }
+  const wcos = Math.cos(windAng), wsin = Math.sin(windAng);
+  for (const c of clouds) {
+    c.vx = wcos * c.speed; c.vy = wsin * c.speed;
+    c.wx += c.vx * dt; c.wy += c.vy * dt;
+    if (offscreen(c.wx, c.wy, cloudMargin(c))) recycleCloud(c);
+  }
+  rebuildCloudField(); // refresh the fast coverage snapshot now that clouds have moved
+
+  // Bugs: despawn out-of-view swarms, refill in view over land.
+  for (let i = swarms.length - 1; i >= 0; i--) if (offscreen(swarms[i].wx, swarms[i].wy)) swarms.splice(i, 1);
+  const target = Math.max(0, (GD.ambient.bugs.swarms | 0) || 0);
+  let guard = 0;
+  while (swarms.length < target && guard++ < target + 2) { const s = newSwarm(); if (s) swarms.push(s); else break; }
+  for (const s of swarms) {
+    s.t += dtMs;
+    if (s.t >= s.next) { s.t = 0; s.next = rand(pick(GD.ambient.bugs.wanderMs, 0, 700), pick(GD.ambient.bugs.wanderMs, 1, 1800)); s.ang += rand(-0.8, 0.8); }
+    const cell = worldToCell(s.wx, s.wy);
+    s.onLand = nearLand(cell.col, cell.row);
+    if (s.onLand) { s.homeWX = s.wx; s.homeWY = s.wy; }
+    else { s.ang = Math.atan2(s.homeWY - s.wy, s.homeWX - s.wx); }
+    s.wx += Math.cos(s.ang) * s.sp * dt; s.wy += Math.sin(s.ang) * s.sp * dt;
+    for (const b of s.bugs) updateBug(b, s, dt);
+  }
+
+  // Birds.
+  const ba = GD.ambient.birds;
+  if (ba && birds.length < birdMax() && Math.random() < (ba.spawnChancePerSec || 0) * dt) spawnBirdFlock();
+  for (let i = birds.length - 1; i >= 0; i--) {
+    const bd = birds[i];
+    bd.wx += bd.vx * dt; bd.flap += dtMs; bd.phase += dtMs;
+    bd.wy += Math.sin(bd.phase * (Math.PI * 2) / bd.bobMs) * bd.bob * dt;
+    if (offscreen(bd.wx, bd.wy)) birds.splice(i, 1);
+  }
+
+  // Moon/sun beams: gentle brightness shimmer + a shared steady drift (the moving
+  // light source), recycling at the upwind edge - world-anchored, never camera-locked.
+  for (const b of moonbeams) {
+    b.phase += b.phaseSpeed * dtMs;
+    b.wx += b.vx * dt; b.wy += b.vy * dt;
+    if (offscreen(b.wx, b.wy, beamMargin(b))) recycleMoonbeam(b);
+  }
+}
+
+// --- Render -----------------------------------------------------------
+export function renderAmbient() {
+  if (!GD.ambient || !G.hasWorld || !inited) return;
+  const z = G.cam.zoom;
+  renderMoonlight();   // UNDER the cloud shadows: clouds dim it, so it reads as moonlight through the GAPS
+  for (const c of clouds) drawCloud(c, z);
+  for (const s of swarms) { if (s.onLand) for (const b of s.bugs) drawBug(b); }
+  for (const bd of birds) drawBird(bd, z);
+}
+
+// Fake moon/sun beams: short additive light shafts that slant in from the top-right
+// (the object-shadow lean, derived from SHADOW_SKEW/SQUASH so they stay matched) and
+// LAND on a single land tile, with a soft pool that gives that tile a touch more
+// brightness - like a ray cast onto it, not a streak across the whole screen. Drawn
+// BEFORE the cloud shadows (painted next), so a cloud passing over dims the lit tile.
+// Present day AND night: the colour blends from cool BLUE (night) to warm YELLOW/ORANGE
+// (day) by dayAmount, so as the sun rises the moonbeams become sun rays. World-anchored
+// + drifting (see update), so the pools glide over the terrain as the light source moves.
+function renderMoonlight() {
+  const m = GD.ambient.moonlight;
+  if (!m || !moonbeams.length) return;
+  const z = G.cam.zoom;
+  // Tilt = object-shadow lean; rotating local -y to (sin,-cos) aims the shaft UP-RIGHT
+  // toward the source, so it lands coming from the top-right. gamedata angleDeg overrides.
+  const ang = (m.angleDeg != null) ? (m.angleDeg * Math.PI / 180) : Math.atan2(SHADOW_SKEW, SHADOW_SQUASH);
+  const day = dayAmount();                   // 0 across night -> 1 at noon (ramps through dawn/dusk)
+  const nc = m.nightColor || [120, 165, 255], dc = m.dayColor || [255, 205, 120];
+  const rgb = Math.round(nc[0] + (dc[0] - nc[0]) * day) + ", " +
+              Math.round(nc[1] + (dc[1] - nc[1]) * day) + ", " +
+              Math.round(nc[2] + (dc[2] - nc[2]) * day);
+  const baseA = (m.alpha != null ? m.alpha : 0.14);
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter"; // additive: beams add light to the scene
+  for (const b of moonbeams) {
+    const cell = worldToCell(b.wx, b.wy);
+    if (tileAt(cell.col, cell.row) === "water") continue; // only light land tiles
+    const a = baseA * b.aScale * (0.75 + 0.25 * Math.sin(b.phase)); // gentle shimmer
+    if (a <= 0.002) continue;
+    const p = worldToScreen(b.wx, b.wy);
+    const lenPx = b.len * 2 * HALF_H * z, hw = b.width * HALF_W * z;
+    // Shaft: a soft elongated radial glow along the beam, NOT a hard rect - feathered
+    // on every edge (sides + tip) so it reads as a soft beam. Drawn by scaling a unit
+    // radial into an ellipse hw across by ~lenPx long, centered a bit up the beam toward
+    // the source; brightest at its core, fading to nothing at the rim.
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(ang);                          // local -y -> up-right (toward the light source)
+    ctx.translate(0, -lenPx * 0.4);
+    ctx.scale(hw, lenPx * 0.55);
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    g.addColorStop(0, "rgba(" + rgb + ", " + a.toFixed(3) + ")");
+    g.addColorStop(0.5, "rgba(" + rgb + ", " + (a * 0.5).toFixed(3) + ")");
+    g.addColorStop(1, "rgba(" + rgb + ", 0)");
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(0, 0, 1, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    // Soft pool where it lands: spreads over a RADIUS of several tiles, losing
+    // brightness outward (radial falloff) - the light spilling across the ground, not
+    // a single-tile dot. Radius is poolTiles tiles wide, scaled by zoom.
+    const pr = Math.max(4, (m.poolTiles != null ? m.poolTiles : 2.5) * 2 * HALF_W * z);
+    const pg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, pr);
+    pg.addColorStop(0, "rgba(" + rgb + ", " + a.toFixed(3) + ")");
+    pg.addColorStop(0.4, "rgba(" + rgb + ", " + (a * 0.4).toFixed(3) + ")");
+    pg.addColorStop(1, "rgba(" + rgb + ", 0)");
+    ctx.fillStyle = pg;
+    ctx.beginPath(); ctx.arc(p.x, p.y, pr, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// Cloud shadow = darkened floor TILES (iso diamonds) in a lumpy, banded blob, so
+// it mimics the tile grid instead of a smooth circle. Alpha steps in 3 bands
+// (denser center) for a pixel/tile look; the outline is perturbed per cloud.
+function drawCloud(c, z) {
+  // Anchor the shape to the cloud's CONTINUOUS (fractional) cell position so it
+  // glides smoothly instead of snapping tile-by-tile - each grid-aligned tile's
+  // darkness is a smooth function of its offset from the real cloud position.
+  const fcol = c.wx / (2 * HALF_W) + c.wy / (2 * HALF_H);
+  const frow = c.wy / (2 * HALF_H) - c.wx / (2 * HALF_W);
+  const ccol = Math.round(fcol), crow = Math.round(frow);
+  const R = c.rCells, hw = HALF_W * z, hh = HALF_H * z, RR = Math.ceil(R) + 1;
+  // Batch the diamonds into 3 alpha-band paths and fill each ONCE. (It used to do a
+  // separate beginPath+fill per tile - hundreds of canvas fills per cloud, which is
+  // the rain/heavy-coverage perf sink.) Same look: each band is one translucent layer.
+  const bands = [new Path2D(), new Path2D(), new Path2D()];
+  for (let dr = -RR; dr <= RR; dr++) {
+    for (let dc = -RR; dc <= RR; dc++) {
+      const col = ccol + dc, row = crow + dr;
+      const ox = col - fcol, oy = row - frow;        // continuous offset (cell space)
+      const d = Math.hypot(ox, oy);
+      if (d > R * 1.15) continue;                    // beyond the max lumpy radius -> skip the trig
+      const ang = Math.atan2(oy, ox);
+      const reff = R * (0.78 + 0.22 * Math.sin(2 * ang + c.phase) + 0.14 * Math.sin(3 * ang + c.phase2));
+      if (d > reff) continue;
+      const lvl = Math.ceil((1 - d / reff) * 3);     // 3 alpha bands (tiled falloff)
+      if (lvl <= 0) continue;
+      const cc = cellCenter(col, row), s = worldToScreen(cc.x, cc.y);
+      const p = bands[Math.min(3, lvl) - 1];
+      p.moveTo(s.x, s.y - hh); p.lineTo(s.x + hw, s.y); p.lineTo(s.x, s.y + hh); p.lineTo(s.x - hw, s.y); p.closePath();
+    }
+  }
+  const rainBoost = 1 + weatherRain() * 0.7; // storm clouds read darker when it rains
+  for (let bi = 0; bi < 3; bi++) {
+    const a = c.alpha * ((bi + 1) / 3) * rainBoost;
+    if (a <= 0.004) continue;
+    ctx.fillStyle = "rgba(0, 0, 0, " + a.toFixed(3) + ")";
+    ctx.fill(bands[bi]);
+  }
+}
+
+function drawBug(b) {
+  // Always 1px (true bug-sized at any zoom) - position is world-anchored, size is not.
+  const tr = b.trail, n = tr.length / 2;
+  for (let i = 0; i < n; i++) {
+    const a = 0.5 * (i + 1) / n;
+    const p = worldToScreen(tr[i * 2], tr[i * 2 + 1]);
+    ctx.fillStyle = "rgba(" + b.rgb + ", " + a.toFixed(3) + ")";
+    ctx.fillRect(Math.round(p.x), Math.round(p.y), 1, 1);
+  }
+  const p = worldToScreen(b.wx, b.wy);
+  const sz = (GD.ambient.bugs.pxSize | 0) || 2; // FIXED px (never scales with zoom)
+  ctx.fillStyle = "rgba(" + b.rgb + ", 0.95)";
+  ctx.fillRect(Math.round(p.x) - (sz >> 1), Math.round(p.y) - (sz >> 1), sz, sz);
+}
+
+// Live counts for the debug overlay (to confirm spawning).
+export function ambientCounts() {
+  let bugCount = 0;
+  for (const s of swarms) bugCount += s.bugs.length;
+  return { clouds: clouds.length, swarms: swarms.length, bugs: bugCount, birds: birds.length, beams: moonbeams.length };
+}
+
+function drawBird(bd, z) {
+  const p = worldToScreen(bd.wx, bd.wy);
+  const flap = Math.sin(bd.flap * (Math.PI * 2) / (GD.ambient.birds.wingMs || 240));
+  const s = bd.size * z, wy = s * (0.25 + 0.55 * flap);
+  ctx.strokeStyle = "rgba(40, 46, 58, 0.82)";
+  ctx.lineWidth = Math.max(1, s * 0.13);
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(p.x - s, p.y - wy);
+  ctx.quadraticCurveTo(p.x - s * 0.3, p.y + s * 0.18, p.x, p.y);
+  ctx.quadraticCurveTo(p.x + s * 0.3, p.y + s * 0.18, p.x + s, p.y - wy);
+  ctx.stroke();
+}

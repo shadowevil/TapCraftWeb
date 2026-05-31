@@ -10,6 +10,7 @@ import { GD } from "./gamedata.js";
 import { consoleOverlay, consoleLogEl, consoleInput } from "./dom.js";
 import { updateResourceUI } from "./ui.js";
 import { addTool } from "./resources.js";
+import { setWeather, weatherKinds } from "./env.js";
 
 const MAX_LOG = 200; // keep memory bounded; CSS limits visible lines to ~10
 
@@ -57,6 +58,26 @@ register("debugoverlay", "debugoverlay <true|false>", (args) => {
   else if (a === "") G.debugOverlay = !G.debugOverlay; // bare toggle
   else return { text: "Usage: debugoverlay <true|false>", error: true };
   return "Debug overlay " + (G.debugOverlay ? "ON" : "OFF") + ". Hover a tile to inspect it.";
+});
+
+// Jump the day/night cycle to a named time of day (dev/testing). Sets the phase
+// directly; the tint/shadows update instantly and the day/night ambience swaps on
+// the next sim tick while the game is running.
+const TIMES = { sunrise: 0.25, morning: 0.36, noon: 0.50, afternoon: 0.62, evening: 0.72, dusk: 0.78, night: 0.92 };
+register("settime", "settime <" + Object.keys(TIMES).join("|") + ">", (args) => {
+  if (!G.hasWorld) return { text: "No active world.", error: true };
+  const key = (args[0] || "").toLowerCase();
+  if (!(key in TIMES)) return { text: "Unknown time '" + (args[0] || "") + "'. Valid: " + Object.keys(TIMES).join(", "), error: true };
+  G.world.timeOfDay = TIMES[key];
+  const h = Math.floor(TIMES[key] * 24), m = Math.floor((TIMES[key] * 24 - h) * 60);
+  return "Time set to " + key + " (" + (h < 10 ? "0" + h : h) + ":" + (m < 10 ? "0" + m : m) + ").";
+});
+
+register("setweather", "setweather <clear|cloudy|rain|storm>", (args) => {
+  if (!G.hasWorld) return { text: "No active world.", error: true };
+  const k = (args[0] || "").toLowerCase();
+  if (!setWeather(k)) return { text: "Unknown weather '" + (args[0] || "") + "'. Valid: " + weatherKinds().join(", "), error: true };
+  return "Weather set to " + k + " (eases in over a few seconds).";
 });
 
 register("help", "help", () => {
