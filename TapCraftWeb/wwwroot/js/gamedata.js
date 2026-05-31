@@ -17,10 +17,12 @@ export const GD = {};
 // IMPORTANT: bump this TOGETHER with the "version" field in
 // wwwroot/data/gamedata.json whenever you edit the data file. The cached copy
 // is reused only when its version matches this value; otherwise it re-fetches.
-export const EXPECTED_VERSION = 20;
+export const EXPECTED_VERSION = 21;
 
 const CACHE_KEY = "tapcraft.gamedata";
-const DATA_URL = "/data/gamedata.json";
+// Relative (no leading slash) so it resolves against the page, working both at the
+// site root (.NET dev) and under a GitHub Pages project sub-path (/<repo>/).
+const DATA_URL = "data/gamedata.json";
 
 function readCache() {
   try {
