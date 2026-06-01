@@ -51,6 +51,7 @@ export const G = {
   pendingPanels: null,        // saved craft/build panel layout from loadWorld, applied in startGame
   running: false,
   hasWorld: false,
+  useGL: false,               // true once the WebGL2 renderer + atlas are ready (else 2D path)
   inMenu: false,
   resumeRunning: false,       // running-state to restore after the menu modal
   pendingDelete: null,        // world queued for delete confirmation

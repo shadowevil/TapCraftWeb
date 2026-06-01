@@ -21,6 +21,8 @@ import { popFactor, dropImage, dropScreen } from "./resources.js";
 import { canPlaceFootprint, canAffordBuilding, buildingTargets, cellsInRange, hutToolKind, hutToolCount } from "./buildings.js";
 import { mineableAt, mineableSprite } from "./mineable.js";
 import { tileAt, stageAt, progressAt, chopAt, rockRawAt, baseCacheSize, decorAt, shoreDist, biomeAt, moistureAt, landHeightAt, uplandAt } from "./cells.js";
+import * as glr from "./gl/glrender.js";
+import { uvFor } from "./gl/atlas.js";
 import { PERF, pBegin, pEnd, pCount } from "./perf.js";
 import { renderAmbient, ambientCounts } from "./ambient.js";
 import { envTint, shadowMul, weatherDim, weatherCloud, weatherRain, weatherKind } from "./env.js";
@@ -373,6 +375,10 @@ function drawSmokeFrame(img, cx, baseY, unit, alpha) {
 // re-rendered when its signature changes. The offscreen canvas mirrors the main
 // canvas backing + DPR transform so the blit is a 1:1 device-pixel copy.
 let floorCanvas = null, floorCtx = null, floorKey = "";
+let glFloorKey = ""; // signature of the cached GL floor instance buffer (rebuild on change)
+let glWasOn = false; // was the GL path active last frame (force a floor rebuild when it resumes)
+let glWaterTiles = [];     // [{idx,c,r}] cached-floor instance indices of visible water tiles
+let glWaterFrameCached = -1; // the water frame currently baked into the cached floor buffer
 let frameShadowMul = 1; // object-shadow alpha multiplier for this frame (day/night)
 let frameShadowSkip = false; // this frame, skip object cast shadows (too many entities)
 function ensureFloorCanvas() {
@@ -411,6 +417,137 @@ function renderFloor(b, z, waterFrame) {
           floorCtx.fill();
         }
       }
+    }
+  }
+}
+// WebGL floor: emit one instance per visible ground tile (no offscreen cache - the GPU
+// redraws the whole floor cheaply each frame). Same screen math as renderFloor. Coastal
+// shallows are re-added as a per-instance tint in a later phase.
+function emitFloorGL(b, z, waterFrame) {
+  glWaterTiles.length = 0; // rebuilt with the floor: indices of water tiles for the UV patch
+  const cx = G.cam.x, cy = G.cam.y, half = (SPRITE / 2) * z;
+  const ter = GD.worldgen.terrain || {};
+  const shMax = ter.shallowTiles || 0, shA = ter.shallowAlpha || 0;
+  for (let r = b.r0; r <= b.r1; r++) {
+    for (let c = b.c0; c <= b.c1; c++) {
+      const tile = tileAt(c, r);
+      const tImg = tileSprite(tile, c, r, waterFrame);
+      if (!tImg || !tImg.naturalWidth) continue;
+      const sx = (c - r) * HALF_W * z + cx, sy = (c + r) * HALF_H * z + cy;
+      const dw = (tImg.naturalWidth || SPRITE) * z, dh = (tImg.naturalHeight || SPRITE) * z;
+      if (tile === "water") glWaterTiles.push({ idx: glr.floorInstanceCount(), c, r });
+      // Coastal shallows: lighten + cyan-shift water near shore via a per-instance tint (the
+      // GL stand-in for the 2D translucent overlay). Strength fades with shore distance, and
+      // it bakes into the cached floor buffer (pure per-cell, like the 2D version).
+      let tint = null;
+      if (shMax > 0 && shA > 0 && tile === "water") {
+        const sd = shoreDist(c, r);
+        if (sd >= 1) {
+          const s = shA * (1 - (sd - 1) / shMax);
+          tint = [1 + s * 1.0, 1 + s * 1.3, 1 + s * 1.7, 1];
+        }
+      }
+      glr.sprite(tImg, sx - dw / 2, sy + half - dh, dw, dh, false, tint);
+    }
+  }
+}
+
+// --- WebGL entity emission (mirror of the 2D draw* helpers; sprites -> GL batch) -------
+// Hover/day-night fold into a per-instance premultiplied tint; the active/selection rings
+// are vector and stay on the 2D overlay (drawWorldRingsGL). Shadows are emitted freely -
+// the GPU makes them cheap, so the dense-scene shadow-skip is irrelevant on the GL path.
+const HOVER_TINT = [1.6, 1.6, 1.6, 1];      // object hover brighten (matches brightness 1.6)
+const BLD_HOVER_TINT = [1.5, 1.5, 1.5, 1];  // building hover brighten (matches 1.5)
+const BROKEN_TINT = [0.8, 0.8, 0.8, 0.8];   // floating broken-tool icon at 0.8 alpha
+
+function emitShadowRectGL(img, centerX, rect, unit, flip) {
+  const sh = img._shadow; if (!sh) return;
+  const meta = sh._sb;
+  const footRows = meta ? (meta.maxy + 1) : (img.naturalHeight || SPRITE);
+  const groundY = rect.ty + footRows * unit;
+  if (G.poolSprite && meta) {
+    const fx = rect.tx + meta.footX * unit;
+    const pw = meta.w * 0.9 * unit, ph = pw * SHADOW_POOL_RATIO;
+    glr.pool(G.poolSprite, fx, groundY, pw, ph, SHADOW_POOL_ALPHA * frameShadowMul);
+  }
+  glr.shadowCast(sh, centerX, groundY, rect.dw, rect.dh, footRows, unit, flip, SHADOW_SKEW, SHADOW_SQUASH, SHADOW_ALPHA * frameShadowMul);
+}
+function emitCellObjectGL(c, r, z, obj, decorIdx) {
+  let img = null, lift = OBJECT_LIFT, sc = 1, flip = false, decor = false;
+  if (obj && obj.img.complete && obj.img.naturalWidth) {
+    img = obj.img; lift = obj.lift; sc = obj.sc * popFactor(c, r); flip = obj.flip;
+  } else if (decorIdx >= 0) {
+    const dp = decorDrawParams(decorIdx, c, r);
+    if (dp) { img = dp.img; lift = dp.lift; sc = dp.sc; flip = dp.flip; decor = true; }
+  }
+  if (!img) return;
+  const s = worldToScreen(cellCenter(c, r).x, cellCenter(c, r).y);
+  const rect = spriteRect(img, s, z, lift, sc);
+  if (z >= SHADOW_MIN_ZOOM) emitShadowRectGL(img, s.x, rect, z * sc, flip);
+  const hl = !decor && G.hover && G.hover.col === c && G.hover.row === r;
+  glr.sprite(img, rect.tx, rect.ty, rect.dw, rect.dh, flip, hl ? HOVER_TINT : null);
+}
+function emitBuildingGL(bd, z) {
+  const img = buildingSprite(bd);
+  if (!img || !img.complete || !img.naturalWidth) return;
+  const a = buildingAnchor(bd.col, bd.row);
+  const rect = spriteRectAt(img, a, z, 0, 1);
+  if (z >= SHADOW_MIN_ZOOM) emitShadowRectGL(img, a.x, rect, z, false);
+  glr.sprite(img, rect.tx, rect.ty, rect.dw, rect.dh, false, bd.id === G.hoverBuilding ? BLD_HOVER_TINT : null);
+  if (GD.buildings[bd.type].category === "harvester" && hutToolCount(bd) <= 0) {
+    const icon = G.brokenIcons[hutToolKind(bd)];
+    if (icon && icon.complete && icon.naturalWidth) {
+      const bob = Math.sin(G.animTime * 0.004) * 4;
+      const iw = icon.naturalWidth * z, ih = icon.naturalHeight * z;
+      glr.sprite(icon, a.x - iw / 2, (a.y - 62 * z - bob) - ih, iw, ih, false, BROKEN_TINT);
+    }
+  }
+  emitSmokeGL(bd, z);
+}
+function emitSmokeGL(bd, z) {
+  const sdef = GD.buildings[bd.type].smoke; if (!sdef) return;
+  const frames = G.smokeImages[bd.type]; if (!frames || !frames.length) return;
+  const anchor = (sdef.anchor && (sdef.anchor[bd.facing] || sdef.anchor.SE)); if (!anchor) return;
+  const bimg = buildingSprite(bd); if (!bimg || !bimg.complete || !bimg.naturalWidth) return;
+  const rect = spriteRectAt(bimg, buildingAnchor(bd.col, bd.row), z, 0, 1);
+  const stackX = rect.tx + anchor[0] * z, stackY = rect.ty + anchor[1] * z;
+  const t = G.animTime + (bd.col * 131 + bd.row * 197);
+  const bob = Math.sin(t * (2 * Math.PI) / (sdef.bobMs || 1800)) * (sdef.bobPx || 2) * z;
+  const baseY = stackY + bob, n = frames.length;
+  const phase = t / (sdef.frameMs || 450);
+  const i = ((Math.floor(phase) % n) + n) % n, f = phase - Math.floor(phase);
+  const op = (sdef.opacity != null) ? sdef.opacity : 0.75, unit = z * (sdef.scale || 1);
+  emitSmokeFrameGL(frames[i], stackX, baseY, unit, op * (1 - f));
+  emitSmokeFrameGL(frames[(i + 1) % n], stackX, baseY, unit, op * f);
+}
+function emitSmokeFrameGL(img, cx, baseY, unit, alpha) {
+  if (!img || !img.complete || !img.naturalWidth || alpha <= 0.001) return;
+  const w = img.naturalWidth * unit, h = img.naturalHeight * unit;
+  glr.sprite(img, cx - w / 2, baseY - h, w, h, false, [alpha, alpha, alpha, alpha]);
+}
+function emitDropsGL(z) {
+  for (const d of G.drops) {
+    if (d.phase === "fly") continue;
+    const img = dropImage(d.kind);
+    if (!img || !img.complete || !img.naturalWidth) continue;
+    const lw = (img.naturalWidth || 32) * z * DROP_SCALE, lh = (img.naturalHeight || 23) * z * DROP_SCALE;
+    const sp = dropScreen(d);
+    if (img._shadow) glr.shadowCast(img._shadow, sp.x, sp.y, lw, lh, 1, lh, false, SHADOW_SKEW, SHADOW_SQUASH, SHADOW_ALPHA * frameShadowMul);
+    glr.sprite(img, sp.x - lw / 2, sp.y - lh, lw, lh, false, null);
+  }
+}
+// Active-cell + building selection/hover rings (vector) on the 2D overlay, on top of the
+// GL world. On GL they sit fully on top instead of wrapping behind the object (accepted).
+function drawWorldRingsGL(z, activeCell) {
+  if (activeCell) {
+    const s = worldToScreen(cellCenter(activeCell.col, activeCell.row).x, cellCenter(activeCell.col, activeCell.row).y);
+    const d = tileDiamond(s, z);
+    strokeDiamondHalf(d, "back"); strokeDiamondHalf(d, "front");
+  }
+  for (const bd of G.world.buildings) {
+    if (bd.id === G.hoverBuilding || bd.id === G.selectedBuilding) {
+      const ring = buildingDiamond(bd.col, bd.row, z);
+      strokeDiamondHalf(ring, "back"); strokeDiamondHalf(ring, "front");
     }
   }
 }
@@ -454,19 +591,45 @@ export function render() {
   const waterFrame = (z < WATER_ANIM_MIN_ZOOM) ? 0 : waterFrameIndex();
   // The active cell is the hovered tree's cell (if any), else the ground tile.
   const activeCell = G.hover || G.hoverTile;
+  // Use the WebGL world renderer when enabled AND the context is ready. A lost GL context
+  // makes glReady() false -> automatic fallback to the 2D path until it is restored.
+  const useGL = G.useGL && glr.glReady();
 
-  // Floor: cached. Re-render the tiles into the offscreen layer only when its
-  // signature (camera/zoom/water frame/visible range) changes; otherwise blit the
-  // cached layer with one device-pixel copy. This removes the per-tile floor draw
-  // (the zoom-out hot path) on every frame where nothing about the floor moved.
+  // Floor. GL path: clear the GL canvas + emit the visible tiles to the batch (the GPU
+  // redraws the floor cheaply every frame; no offscreen cache). 2D fallback: re-render
+  // tiles into the offscreen layer only when its signature (camera/zoom/water/range)
+  // changes, else blit the cached layer with one device-pixel copy.
   const _w0 = pBegin();
-  ensureFloorCanvas();
-  const fkey = G.cam.x + "|" + G.cam.y + "|" + z + "|" + waterFrame + "|" + b.c0 + "|" + b.r0 + "|" + b.c1 + "|" + b.r1;
-  if (fkey !== floorKey) { renderFloor(b, z, waterFrame); floorKey = fkey; }
-  ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);   // identity: blit backing 1:1
-  ctx.drawImage(floorCanvas, 0, 0);
-  ctx.restore();
+  if (useGL) {
+    glr.beginFrame();
+    // Cache the floor instance buffer; rebuild it only when the floor signature changes
+    // (camera/zoom/range - NOT the water frame) or when the GL path just resumed (its buffers
+    // were recreated). Water animates at EVERY zoom without a rebuild: on a water tick, only
+    // the cached water tiles' UVs are rewritten in place (cheap) and the buffer re-uploaded.
+    const glWaterFrame = waterFrameIndex(); // GL animates water at all zooms (no 2D-style freeze)
+    const fkey = G.cam.x + "|" + G.cam.y + "|" + z + "|" + b.c0 + "|" + b.r0 + "|" + b.c1 + "|" + b.r1;
+    if (!glWasOn || fkey !== glFloorKey) {
+      glr.beginFloor(); emitFloorGL(b, z, glWaterFrame); glr.endFloor();
+      glFloorKey = fkey; glWaterFrameCached = glWaterFrame;
+    } else if (glWaterTiles.length && glWaterFrame !== glWaterFrameCached) {
+      for (const w of glWaterTiles) {
+        const uv = uvFor(tileSprite("water", w.c, w.r, glWaterFrame));
+        if (uv) glr.patchFloorUV(w.idx, uv.u0, uv.v0, uv.u1, uv.v1);
+      }
+      glr.reuploadFloor();
+      glWaterFrameCached = glWaterFrame;
+    }
+    glr.drawFloor();
+    // entities + drops emit into the dynamic batch below; flush + env tint happen after them.
+  } else {
+    ensureFloorCanvas();
+    const fkey = G.cam.x + "|" + G.cam.y + "|" + z + "|" + waterFrame + "|" + b.c0 + "|" + b.r0 + "|" + b.c1 + "|" + b.r1;
+    if (fkey !== floorKey) { renderFloor(b, z, waterFrame); floorKey = fkey; }
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);   // identity: blit backing 1:1
+    ctx.drawImage(floorCanvas, 0, 0);
+    ctx.restore();
+  }
   pCount("cells", (b.c1 - b.c0 + 1) * (b.r1 - b.r0 + 1));
   pEnd("world", _w0);
 
@@ -516,9 +679,17 @@ export function render() {
   // threshold, so panning a forest edge doesn't flicker shadows on and off.
   frameShadowSkip = entities.length > (frameShadowSkip ? SHADOW_SKIP_COUNT * 0.75 : SHADOW_SKIP_COUNT);
   for (const e of entities) {
-    if (e.kind === "bld") drawBuildingEntity(e.bd, z);
-    else if (e.kind === "splash") drawSplash(e.c, e.r, e.sp, z);
-    else drawCellObject(e.c, e.r, z, activeCell, e.obj, e.decorIdx);
+    if (useGL) {
+      if (e.kind === "bld") emitBuildingGL(e.bd, z);
+      else if (e.kind === "splash") drawSplash(e.c, e.r, e.sp, z); // vector splash stays on the 2D overlay
+      else emitCellObjectGL(e.c, e.r, z, e.obj, e.decorIdx);
+    } else if (e.kind === "bld") {
+      drawBuildingEntity(e.bd, z);
+    } else if (e.kind === "splash") {
+      drawSplash(e.c, e.r, e.sp, z);
+    } else {
+      drawCellObject(e.c, e.r, z, activeCell, e.obj, e.decorIdx);
+    }
   }
   pCount("entities", entities.length);
   pEnd("entities", _e0);
@@ -526,27 +697,42 @@ export function render() {
   // Ground drops (resource pickups) drawn on top of the world, each with a
   // matching cast shadow sheared along the ground.
   const _o0 = pBegin();
-  for (const d of G.drops) {
-    if (d.phase === "fly") continue;
-    const img = dropImage(d.kind);
-    if (!img || !img.complete || !img.naturalWidth) continue;
-    const lw = (img.naturalWidth || 32) * z * DROP_SCALE;
-    const lh = (img.naturalHeight || 23) * z * DROP_SCALE;
-    const sp = dropScreen(d);
-    if (img._shadow) {
-      ctx.save();
-      ctx.globalAlpha = SHADOW_ALPHA * frameShadowMul;
-      ctx.translate(sp.x, sp.y); // base of the drop
-      ctx.transform(1, 0, SHADOW_SKEW, SHADOW_SQUASH, 0, 0);
-      ctx.drawImage(img._shadow, -lw / 2, -lh, lw, lh);
-      ctx.restore();
-      ctx.globalAlpha = 1;
+  if (useGL) {
+    emitDropsGL(z);
+  } else {
+    for (const d of G.drops) {
+      if (d.phase === "fly") continue;
+      const img = dropImage(d.kind);
+      if (!img || !img.complete || !img.naturalWidth) continue;
+      const lw = (img.naturalWidth || 32) * z * DROP_SCALE;
+      const lh = (img.naturalHeight || 23) * z * DROP_SCALE;
+      const sp = dropScreen(d);
+      if (img._shadow) {
+        ctx.save();
+        ctx.globalAlpha = SHADOW_ALPHA * frameShadowMul;
+        ctx.translate(sp.x, sp.y); // base of the drop
+        ctx.transform(1, 0, SHADOW_SKEW, SHADOW_SQUASH, 0, 0);
+        ctx.drawImage(img._shadow, -lw / 2, -lh, lw, lh);
+        ctx.restore();
+        ctx.globalAlpha = 1;
+      }
+      ctx.drawImage(img, sp.x - lw / 2, sp.y - lh, lw, lh);
     }
-    ctx.drawImage(img, sp.x - lw / 2, sp.y - lh, lw, lh);
   }
 
-  // Day/night + weather tint over the world (under the UI highlights / ambient FX).
-  applyEnvTint();
+  // Finish the GL world batch: flush all sprites (floor + entities + drops) in one draw,
+  // then the day/night + weather tint as a GPU multiply pass, then the vector rings on the
+  // 2D overlay. The 2D path applies the multiply directly. Selected-target highlights /
+  // ghost / ambient / weather draw on the overlay after this.
+  if (useGL) {
+    glr.flush();
+    const tc = envTintColor();
+    if (tc) glr.drawEnvTint(tc.r, tc.g, tc.b);
+    drawWorldRingsGL(z, activeCell);
+  } else {
+    applyEnvTint();
+  }
+  glWasOn = useGL; // for the floor-rebuild-on-resume check next frame
 
   // Selected building: highlight its in-range eligible targets so the player
   // can see what it will harvest.
@@ -617,30 +803,33 @@ export function render() {
 
 // Day/night + weather scene tint: one translucent rect over the whole viewport,
 // drawn over the world (the cached floor + entities) but under UI highlights/FX.
-function applyEnvTint() {
-  // Not on the main-menu preview: the day/night tint is a gameplay effect, and a
-  // multiply rect over the menu's (intentionally transparent) canvas regions would
-  // paint them opaque and hide the CSS gradient behind the canvas.
-  if (G.inMenu) return;
+// The day/night + weather tint color (0..255 RGB) to multiply the world by, or null if
+// there is effectively no tint (or on the menu preview). Shared by the 2D fill and the GL
+// multiply pass. Multiply (not a translucent rect) gives true darkening with a clean blue
+// night cast: the tint alpha is pre-blended toward white (a=0 -> identity), then the
+// weather dim scales the whole light color down (overcast = dimmer).
+function envTintColor() {
+  // Not on the main-menu preview: the day/night tint is a gameplay effect, and a multiply
+  // over the menu's (intentionally transparent) regions would hide the CSS gradient behind.
+  if (G.inMenu) return null;
   const tint = envTint();
   const ta = tint ? tint.a : 0;
   const wdim = weatherDim(); // extra darkening from overcast/rain (any time of day)
-  if (ta <= 0.003 && wdim <= 0.003) return;
-  // Composite with "multiply", not a plain translucent rect. A semi-opaque sheet
-  // lifts the blacks toward its own color (a flat hazy wash); multiplying by a
-  // light color instead scales every pixel DOWN toward that color - true darkening,
-  // and the blue night cast comes through cleanly. The day/night tint alpha is
-  // folded into the color by pre-blending toward white (a=0 -> white -> identity);
-  // the weather dim then scales the whole light color down (overcast = dimmer).
+  if (ta <= 0.003 && wdim <= 0.003) return null;
   let r = 255, g = 255, b = 255;
   if (tint && ta > 0) {
     const inv = 1 - ta;
     r = 255 * inv + tint.r * ta; g = 255 * inv + tint.g * ta; b = 255 * inv + tint.b * ta;
   }
   if (wdim > 0) { const f = 1 - wdim; r *= f; g *= f; b *= f; }
+  return { r, g, b };
+}
+function applyEnvTint() {
+  const c = envTintColor();
+  if (!c) return;
   ctx.save();
   ctx.globalCompositeOperation = "multiply";
-  ctx.fillStyle = "rgb(" + Math.round(r) + ", " + Math.round(g) + ", " + Math.round(b) + ")";
+  ctx.fillStyle = "rgb(" + Math.round(c.r) + ", " + Math.round(c.g) + ", " + Math.round(c.b) + ")";
   ctx.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
   ctx.restore();
 }
@@ -719,7 +908,7 @@ function drawDebugOverlay(z) {
   for (const name of phaseOrder) {
     if (PERF.ms[name] !== undefined) lines.push("  " + name.padEnd(9) + PERF.ms[name].toFixed(2));
   }
-  lines.push("cells " + (PERF.count.cells || 0) + "  entities " + (PERF.count.entities || 0) + "  shadows " + (frameShadowSkip ? "OFF(dense)" : "on"));
+  lines.push("cells " + (PERF.count.cells || 0) + "  entities " + (PERF.count.entities || 0) + "  shadows " + (G.useGL ? "GL" : (frameShadowSkip ? "OFF(dense)" : "on")) + (G.useGL ? "  inst " + glr.instanceCount() : ""));
   lines.push("baseCache " + baseCacheSize() + "  mods " + G.world.mods.size);
   const ac = ambientCounts();
   lines.push("ambient  clouds " + ac.clouds + " swarms " + ac.swarms + " bugs " + ac.bugs + " birds " + ac.birds + " beams " + ac.beams);

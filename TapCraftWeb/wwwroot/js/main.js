@@ -10,6 +10,9 @@ import { AUTOSAVE_MS } from "./config.js";
 import { G } from "./state.js";
 import { loadGameData } from "./gamedata.js";
 import { loadImages, buildMasks, buildShadows } from "./assets.js";
+import { glCanvas } from "./dom.js";
+import { initGL, uploadAtlas } from "./gl/glrender.js";
+import { buildAtlas } from "./gl/atlas.js";
 import { wireUi, resizeCanvas, fitMenu, showMainMenu } from "./ui.js";
 import { saveWorld } from "./persistence.js";
 import { frame } from "./sim.js";
@@ -39,6 +42,9 @@ async function init() {
   }
 
   wireUi();
+  // Create the WebGL2 context before the first resizeCanvas (which sizes #tc-gl + sets the
+  // GL viewport). Falls back to the 2D renderer if WebGL2 is unavailable.
+  const glOk = initGL(glCanvas);
   resizeCanvas();
   // Build the audio graph now (GD.sounds is loaded); it stays suspended until
   // the first user gesture (resumeAudio in input.js). Decode sounds in parallel
@@ -58,6 +64,11 @@ async function init() {
   loadImages().then(() => {
     buildMasks();
     buildShadows();
+    // Build the single runtime atlas from the now-loaded sprites + baked shadows, upload it
+    // as the GL texture, and enable the WebGL world renderer BY DEFAULT. render() falls back
+    // to the 2D path automatically if WebGL2 is unavailable or the context is lost; the
+    // `gl on/off` console command toggles it (hook for a future Graphics options setting).
+    if (glOk) { const atlas = buildAtlas(); uploadAtlas(atlas); G.useGL = !!atlas; }
     showMainMenu();
     requestAnimationFrame(frame);
   });

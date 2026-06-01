@@ -11,6 +11,7 @@ import { consoleOverlay, consoleLogEl, consoleInput } from "./dom.js";
 import { updateResourceUI } from "./ui.js";
 import { addTool } from "./resources.js";
 import { setWeather, weatherKinds } from "./env.js";
+import { glReady } from "./gl/glrender.js";
 
 const MAX_LOG = 200; // keep memory bounded; CSS limits visible lines to ~10
 
@@ -58,6 +59,17 @@ register("debugoverlay", "debugoverlay <true|false>", (args) => {
   else if (a === "") G.debugOverlay = !G.debugOverlay; // bare toggle
   else return { text: "Usage: debugoverlay <true|false>", error: true };
   return "Debug overlay " + (G.debugOverlay ? "ON" : "OFF") + ". Hover a tile to inspect it.";
+});
+
+// Toggle the WebGL2 world renderer vs the Canvas-2D fallback (for A/B during the GL
+// migration). No-op if WebGL2 was unavailable at startup.
+register("gl", "gl <on|off>", (args) => {
+  if (!glReady()) return { text: "WebGL2 renderer unavailable; using the 2D path.", error: true };
+  const a = (args[0] || "").toLowerCase();
+  if (a === "on" || a === "true" || a === "1") G.useGL = true;
+  else if (a === "off" || a === "false" || a === "0") G.useGL = false;
+  else return { text: "Usage: gl <on|off>", error: true };
+  return "WebGL renderer " + (G.useGL ? "ON" : "OFF (Canvas-2D fallback)") + ".";
 });
 
 // Jump the day/night cycle to a named time of day (dev/testing). Sets the phase

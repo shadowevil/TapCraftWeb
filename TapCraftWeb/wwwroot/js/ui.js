@@ -6,7 +6,7 @@ import { MENU_SIZE, TOPBAR_H, SUBBAR_H } from "./config.js";
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
 import {
-  el, canvas, ctx, fxCanvas, fxctx,
+  el, canvas, ctx, fxCanvas, fxctx, glCanvas,
   resourceCountEl,
   menuBtn, craftBtn, craftPanel, craftTitlebar, craftCloseBtn,
   playBtn, pauseBtn, menuModal, mainMenuScreen, worldListEl,
@@ -14,6 +14,7 @@ import {
   buildBtn, buildHint, buildPanel, buildTitlebar, buildCloseBtn, buildListEl, buildingPanel,
   optionsModal, audioRowsEl, eventsEl, dayCounterEl,
 } from "./dom.js";
+import { resizeGL } from "./gl/glrender.js";
 import { fitView, buildingAnchor, centerCameraOn, minZoom } from "./iso.js";
 import { generate } from "./worldgen.js";
 import {
@@ -53,6 +54,15 @@ export function resizeCanvas() {
   canvas.width = Math.round(cssW * dpr);
   canvas.height = Math.round(cssH * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // WebGL world canvas: mirror the main canvas exactly (CSS rect + device backing) so the
+  // GL viewport and the 2D overlay stay pixel-aligned (CSS positioning matches via game.css).
+  if (glCanvas) {
+    glCanvas.style.width = cssW + "px";
+    glCanvas.style.height = cssH + "px";
+    glCanvas.width = Math.round(cssW * dpr);
+    glCanvas.height = Math.round(cssH * dpr);
+    resizeGL(cssW, cssH);
+  }
   // FX overlay spans the whole window (so drops can fly onto the bar).
   fxCanvas.style.width = window.innerWidth + "px";
   fxCanvas.style.height = window.innerHeight + "px";

@@ -9,6 +9,9 @@ export const canvas = document.getElementById("tc-canvas");
 export const ctx = canvas.getContext("2d");
 export const fxCanvas = document.getElementById("tc-fx");
 export const fxctx = fxCanvas.getContext("2d");
+// WebGL2 world canvas (behind #tc-canvas, which becomes a transparent 2D overlay). The
+// gl context itself is created/owned by gl/glrender.js initGL(glCanvas).
+export const glCanvas = document.getElementById("tc-gl");
 export const el = (id) => document.getElementById(id);
 // Resource bar lookups by resource id (wood, stone, ...). The bar markup in
 // Index.cshtml uses the ids tc-<kind>-icon / tc-<kind>-count by convention.

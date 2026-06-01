@@ -22,6 +22,18 @@
 }
 
 /* Canvas fills everything below both top bars. */
+/* WebGL world canvas: shares #tc-canvas's exact rect but sits BEHIND it. #tc-canvas
+   becomes a transparent 2D overlay (vectors/text/FX) that still receives input. */
+#tc-gl {
+  position: fixed;
+  top: calc(var(--tc-topbar-h) + var(--tc-subbar-h));
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: block;
+  z-index: 0;
+  pointer-events: none;
+}
 #tc-canvas {
   position: fixed;
   top: calc(var(--tc-topbar-h) + var(--tc-subbar-h));
@@ -29,6 +41,7 @@
   right: 0;
   bottom: 0;
   display: block;
+  z-index: 1;
   cursor: default;
   touch-action: none;
 }
@@ -95,7 +108,8 @@ body.tc-menu-mode .tc-topbar {
   display: none;
 }
 
-body.tc-menu-mode #tc-canvas {
+body.tc-menu-mode #tc-canvas,
+body.tc-menu-mode #tc-gl {
   top: 0;
   cursor: default;
 }
