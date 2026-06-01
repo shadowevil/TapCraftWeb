@@ -17,7 +17,7 @@ export const GD = {};
 // IMPORTANT: bump this TOGETHER with the "version" field in
 // wwwroot/data/gamedata.json whenever you edit the data file. The cached copy
 // is reused only when its version matches this value; otherwise it re-fetches.
-export const EXPECTED_VERSION = 46;
+export const EXPECTED_VERSION = 51;
 
 const CACHE_KEY = "tapcraft.gamedata";
 // Relative (no leading slash) so it resolves against the page, working both at the

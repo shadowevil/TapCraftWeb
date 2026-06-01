@@ -42,6 +42,16 @@ export const SHADOW_MIN_ZOOM = 0.9;
 // cached to an offscreen layer; freezing water keeps that cache valid every frame
 // when zoomed out (waves are imperceptible there) so the floor isn't re-rendered.
 export const WATER_ANIM_MIN_ZOOM = 2.0;
+// Below this zoom cosmetic ground-cover decorations (flowers/grass patches) are not
+// drawn: they are sub-pixel/imperceptible far out, and probing every visible cell for
+// one would bloat the entity pass over huge/infinite worlds. Same spirit as
+// SHADOW_MIN_ZOOM. `z` is part of the floor-cache key, so crossing this rebuilds.
+export const DECOR_MIN_ZOOM = 1.2;
+// Above this many visible entities (a dense forest/jungle filling the screen), per-object
+// cast shadows are skipped this frame: at that density they overlap into mush, and the
+// extra ~2 drawImage + canvas transform per object dominates the entity pass. The skip
+// applies hysteresis (re-enables at 75% of this) so panning a forest edge doesn't flicker.
+export const SHADOW_SKIP_COUNT = 500;
 
 // --- Click "pop" + resource-drop physics (feel) -----------------------
 export const POP_MS = 280;     // tree click "pop" duration

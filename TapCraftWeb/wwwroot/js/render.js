@@ -5,7 +5,7 @@
 import {
   SPRITE, HALF_W, HALF_H, OBJECT_LIFT,
   SHADOW_ALPHA, SHADOW_SKEW, SHADOW_SQUASH,
-  SHADOW_POOL_ALPHA, SHADOW_POOL_RATIO, DROP_SCALE, SHADOW_MIN_ZOOM, WATER_ANIM_MIN_ZOOM,
+  SHADOW_POOL_ALPHA, SHADOW_POOL_RATIO, DROP_SCALE, SHADOW_MIN_ZOOM, WATER_ANIM_MIN_ZOOM, DECOR_MIN_ZOOM, SHADOW_SKIP_COUNT,
 } from "./config.js";
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
@@ -20,7 +20,7 @@ import {
 import { popFactor, dropImage, dropScreen } from "./resources.js";
 import { canPlaceFootprint, canAffordBuilding, buildingTargets, cellsInRange, hutToolKind, hutToolCount } from "./buildings.js";
 import { mineableAt, mineableSprite } from "./mineable.js";
-import { tileAt, stageAt, progressAt, chopAt, rockRawAt, baseCacheSize } from "./cells.js";
+import { tileAt, stageAt, progressAt, chopAt, rockRawAt, baseCacheSize, decorAt, shoreDist, biomeAt, moistureAt, landHeightAt, uplandAt } from "./cells.js";
 import { PERF, pBegin, pEnd, pCount } from "./perf.js";
 import { renderAmbient, ambientCounts } from "./ambient.js";
 import { envTint, shadowMul, weatherDim, weatherCloud, weatherRain, weatherKind } from "./env.js";
@@ -255,25 +255,45 @@ export function drawBuilding(b, z, bright) {
   if (bright) ctx.filter = "none";
 }
 
-// Draw a single cell's object (rock/tree) with its shadow, click-pop scale,
-// hover brighten, and - if it is the active cell - the bobbing outline ring
-// wrapping it (back edges behind, front edges in front). Used by the unified
-// entity pass so objects and buildings interleave by depth.
-function drawCellObject(c, r, z, activeCell, obj) {
+// Per-cell draw params for a cosmetic decoration sprite: deterministic flip + slight
+// scale jitter (so a field of decorations does not look stamped) and a small
+// data-driven lift. Mirrors plantDrawParams. Returns null if the sprite is not ready.
+function decorDrawParams(idx, c, r) {
+  const img = G.decorImages[idx];
+  if (!img || !img.complete || !img.naturalWidth) return null;
+  const flip = hash01(c, r, (G.world.seed ^ 0x000000c3) >>> 0) < 0.5;
+  const sc = 0.8 + hash01(c, r, (G.world.seed ^ 0x000000d4) >>> 0) * 0.35;
+  const lift = (GD.worldgen.decor && GD.worldgen.decor.lift != null) ? GD.worldgen.decor.lift : 0;
+  return { img, lift, sc, flip };
+}
+
+// Draw a single cell's object (rock/tree) OR, on a bare cell, its cosmetic decoration
+// (flower/grass patch) - with the shadow, click-pop scale (objects only), hover
+// brighten (objects only), and - if it is the active cell - the bobbing outline ring
+// wrapping it. Decorations are drawn like objects but never pop/highlight and are not
+// targetable. Used by the unified entity pass so all three interleave by depth.
+function drawCellObject(c, r, z, activeCell, obj, decorIdx) {
   const isActive = activeCell && activeCell.col === c && activeCell.row === r;
-  if (!obj || !obj.img.complete || !obj.img.naturalWidth) {
+  // Resolve the sprite: a targetable object owns the cell; otherwise a decoration.
+  let img = null, lift = OBJECT_LIFT, sc = 1, flip = false, decor = false;
+  if (obj && obj.img.complete && obj.img.naturalWidth) {
+    img = obj.img; lift = obj.lift; sc = obj.sc * popFactor(c, r); flip = obj.flip;
+  } else if (decorIdx >= 0) {
+    const dp = decorDrawParams(decorIdx, c, r);
+    if (dp) { img = dp.img; lift = dp.lift; sc = dp.sc; flip = dp.flip; decor = true; }
+  }
+  if (!img) {
     // Active empty/flat cell still needs its ground ring (no object to wrap).
     if (isActive) { const s = worldToScreen(cellCenter(c, r).x, cellCenter(c, r).y); const d = tileDiamond(s, z); strokeDiamondHalf(d, "back"); strokeDiamondHalf(d, "front"); }
     return;
   }
   const s = worldToScreen(cellCenter(c, r).x, cellCenter(c, r).y);
-  const sc = obj.sc * popFactor(c, r);
   const diamond = isActive ? tileDiamond(s, z) : null;
   if (diamond) strokeDiamondHalf(diamond, "back");
-  if (z >= SHADOW_MIN_ZOOM) drawShadow(obj.img, s, z, obj.lift, sc, obj.flip); // cast before the sprite
-  const hl = G.hover && G.hover.col === c && G.hover.row === r;
+  if (z >= SHADOW_MIN_ZOOM && !frameShadowSkip) drawShadow(img, s, z, lift, sc, flip); // cast before the sprite (skipped in dense scenes)
+  const hl = !decor && G.hover && G.hover.col === c && G.hover.row === r;
   if (hl) ctx.filter = "brightness(1.6)";
-  drawSprite(obj.img, s, z, obj.lift, sc, obj.flip);
+  drawSprite(img, s, z, lift, sc, flip);
   if (hl) ctx.filter = "none";
   if (diamond) strokeDiamondHalf(diamond, "front");
 }
@@ -354,6 +374,7 @@ function drawSmokeFrame(img, cx, baseY, unit, alpha) {
 // canvas backing + DPR transform so the blit is a 1:1 device-pixel copy.
 let floorCanvas = null, floorCtx = null, floorKey = "";
 let frameShadowMul = 1; // object-shadow alpha multiplier for this frame (day/night)
+let frameShadowSkip = false; // this frame, skip object cast shadows (too many entities)
 function ensureFloorCanvas() {
   if (!floorCanvas) { floorCanvas = document.createElement("canvas"); floorCtx = floorCanvas.getContext("2d"); }
   if (floorCanvas.width !== canvas.width || floorCanvas.height !== canvas.height) {
@@ -367,13 +388,29 @@ function renderFloor(b, z, waterFrame) {
   floorCtx.imageSmoothingEnabled = false;
   floorCtx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
   const cx = G.cam.x, cy = G.cam.y, half = (SPRITE / 2) * z;
+  const ter = GD.worldgen.terrain || {};
+  const shMax = ter.shallowTiles || 0, shCol = ter.shallowColor || [150, 205, 225], shA = ter.shallowAlpha || 0;
+  const hw = HALF_W * z, hh = HALF_H * z;
   for (let r = b.r0; r <= b.r1; r++) {
     for (let c = b.c0; c <= b.c1; c++) {
-      const tImg = tileSprite(tileAt(c, r), c, r, waterFrame);
+      const tile = tileAt(c, r);
+      const tImg = tileSprite(tile, c, r, waterFrame);
       if (!tImg || !tImg.complete || !tImg.naturalWidth) continue; // skip broken/404 tiles
       const sx = (c - r) * HALF_W * z + cx, sy = (c + r) * HALF_H * z + cy;
       const dw = (tImg.naturalWidth || SPRITE) * z, dh = (tImg.naturalHeight || SPRITE) * z;
       floorCtx.drawImage(tImg, sx - dw / 2, sy + half - dh, dw, dh);
+      // Coastal shallows: a translucent lighter wash over water near land, stronger
+      // closer to shore. Cosmetic + pure per-cell, so it bakes into the cached floor.
+      if (shMax > 0 && shA > 0 && tile === "water") {
+        const sd = shoreDist(c, r);
+        if (sd >= 1) {
+          floorCtx.fillStyle = "rgba(" + shCol[0] + "," + shCol[1] + "," + shCol[2] + "," + (shA * (1 - (sd - 1) / shMax)) + ")";
+          floorCtx.beginPath();
+          floorCtx.moveTo(sx, sy - hh); floorCtx.lineTo(sx + hw, sy);
+          floorCtx.lineTo(sx, sy + hh); floorCtx.lineTo(sx - hw, sy); floorCtx.closePath();
+          floorCtx.fill();
+        }
+      }
     }
   }
 }
@@ -439,13 +476,29 @@ export function render() {
   // its FRONT tile (row+1)+(col+1). Ties broken by column so the east-most paints last.
   const _e0 = pBegin();
   const entities = [];
+  const decorOn = z >= DECOR_MIN_ZOOM;   // skip the decoration probe when zoomed far out
+  // Cells under a building footprint: decorations on them despawn (a placed building
+  // takes the tile). Built once per frame from the (few) buildings; only when decor is on.
+  let decorCovered = null;
+  if (decorOn && G.world.buildings.length) {
+    decorCovered = new Set();
+    for (const bd of G.world.buildings) {
+      for (const [bc, br] of buildingCells(bd.col, bd.row)) decorCovered.add(bc + "," + br);
+    }
+  }
   for (let r = b.r0; r <= b.r1; r++) {
     for (let c = b.c0; c <= b.c1; c++) {
       const isActive = activeCell && activeCell.col === c && activeCell.row === r;
+      const tile = tileAt(c, r);
       // Water never holds an object (trees/rocks/ore only spawn on land), so skip
       // the per-cell object probe there.
-      const obj = (tileAt(c, r) === "water") ? null : cellObject(c, r);
-      if (obj || isActive) entities.push({ depth: r + c, col: c, c, r, obj, kind: "obj" });
+      const obj = (tile === "water") ? null : cellObject(c, r);
+      // Cosmetic ground-cover decoration: only on a currently-bare grass cell not under
+      // a building. decorAt is base-pure (cacheable); the !obj + !covered guards make it
+      // delta-aware so nothing draws under a grown/placed object or a building.
+      let decorIdx = -1;
+      if (decorOn && !obj && tile === "grass" && !(decorCovered && decorCovered.has(c + "," + r))) decorIdx = decorAt(c, r);
+      if (obj || isActive || decorIdx >= 0) entities.push({ depth: r + c, col: c, c, r, obj, decorIdx, kind: "obj" });
     }
   }
   for (const bd of G.world.buildings) {
@@ -458,10 +511,14 @@ export function render() {
     entities.push({ depth: sp.r + sp.c, col: sp.c, c: sp.c, r: sp.r, sp, kind: "splash" });
   }
   entities.sort((a, e) => (a.depth - e.depth) || (a.col - e.col) || (a.kind === "bld" ? -1 : 1));
+  // Dense scene -> skip per-object cast shadows (the costly part of each tree draw).
+  // Hysteresis: once skipping, only resume shadows once the count falls well below the
+  // threshold, so panning a forest edge doesn't flicker shadows on and off.
+  frameShadowSkip = entities.length > (frameShadowSkip ? SHADOW_SKIP_COUNT * 0.75 : SHADOW_SKIP_COUNT);
   for (const e of entities) {
     if (e.kind === "bld") drawBuildingEntity(e.bd, z);
     else if (e.kind === "splash") drawSplash(e.c, e.r, e.sp, z);
-    else drawCellObject(e.c, e.r, z, activeCell, e.obj);
+    else drawCellObject(e.c, e.r, z, activeCell, e.obj, e.decorIdx);
   }
   pCount("entities", entities.length);
   pEnd("entities", _e0);
@@ -613,6 +670,9 @@ function drawDebugOverlay(z) {
     lines.push("screen  x=" + Math.round(s.x) + " y=" + Math.round(s.y) + "  zoom=" + z.toFixed(2));
     lines.push("tile  '" + tile + "'" + (tImg ? "  sprite " + (tImg.naturalWidth || "?") + "x" + (tImg.naturalHeight || "?") : "  (no sprite)"));
     lines.push("raw  stage=" + stage + " rock=" + rock + " progress=" + prog + " chop=" + chop);
+    // Biome classification + the fields that drive it (moisture, normalized height).
+    const bi = inB ? (tile === "water" ? "water" : biomeAt(c, r)) : null;
+    lines.push("biome  " + (bi || "-") + "  moist=" + (inB ? moistureAt(c, r).toFixed(2) : "-") + " up=" + (inB ? uplandAt(c, r).toFixed(2) : "-") + " h=" + (inB ? landHeightAt(c, r).toFixed(2) : "-"));
     // The object the renderer would draw here (rock takes precedence).
     const obj = inB ? cellObject(c, r) : null;
     if (obj) {
@@ -629,6 +689,20 @@ function drawDebugOverlay(z) {
     const bd = inB && G.world.buildings.find((bb) =>
       buildingCells(bb.col, bb.row).some(([bc, br]) => bc === c && br === r));
     if (bd) lines.push("building  " + bd.type + " @(" + bd.col + "," + bd.row + ") tools=" + (bd.tools ? bd.tools.count : 0));
+    // Decoration (cosmetic ground cover) the renderer would draw here if the cell is
+    // bare; notes when it is hidden because an object or building occupies the tile.
+    const di = inB ? decorAt(c, r) : -1;
+    if (di >= 0) {
+      const dimg = G.decorImages[di];
+      const dp = decorDrawParams(di, c, r);
+      const hiddenBy = obj ? "object" : (bd ? "building" : null);
+      lines.push("decor  index=" + di + (hiddenBy ? "  (hidden: " + hiddenBy + ")" : ""));
+      if (dp) lines.push("  lift=" + dp.lift + " sc=" + dp.sc.toFixed(2) + " flip=" + (!!dp.flip));
+      lines.push("  sprite " + ((dimg && dimg.naturalWidth) || "?") + "x" + ((dimg && dimg.naturalHeight) || "?") + (dimg && dimg.complete ? "" : " (loading)"));
+      lines.push("  src " + ((dimg && dimg.src) ? dimg.src.split("/").pop() : "(none)"));
+    } else {
+      lines.push("decor  none");
+    }
     // Outline the inspected cell in cyan (no bob) so it is unambiguous.
     const hw = HALF_W * z, hh = HALF_H * z;
     ctx.beginPath();
@@ -645,7 +719,7 @@ function drawDebugOverlay(z) {
   for (const name of phaseOrder) {
     if (PERF.ms[name] !== undefined) lines.push("  " + name.padEnd(9) + PERF.ms[name].toFixed(2));
   }
-  lines.push("cells " + (PERF.count.cells || 0) + "  entities " + (PERF.count.entities || 0));
+  lines.push("cells " + (PERF.count.cells || 0) + "  entities " + (PERF.count.entities || 0) + "  shadows " + (frameShadowSkip ? "OFF(dense)" : "on"));
   lines.push("baseCache " + baseCacheSize() + "  mods " + G.world.mods.size);
   const ac = ambientCounts();
   lines.push("ambient  clouds " + ac.clouds + " swarms " + ac.swarms + " bugs " + ac.bugs + " birds " + ac.birds + " beams " + ac.beams);

@@ -6,7 +6,7 @@ import { G } from "./state.js";
 import { GD } from "./gamedata.js";
 import { hash01, inBounds } from "./rng.js";
 import { MINEABLE_TYPES } from "./mineable.js";
-import { tileAt } from "./cells.js";
+import { tileAt, grassVariantAt } from "./cells.js";
 
 // --- Water autotiling -------------------------------------------------
 export function isLand(col, row) {
@@ -34,6 +34,12 @@ export function tileSprite(id, col, row, frame) {
     const key = waterEdge(col, row) || "center";
     const frames = G.waterImages[key];
     return frames ? frames[frame] : null;
+  }
+  // Grass: pick a per-cell variant sprite (biome-biased). Variant 0 is the base
+  // grass.png. tileAt still reports "grass", so placement/spawns are unaffected.
+  if (id === "grass" && G.grassVariants && G.grassVariants.length) {
+    const v = G.grassVariants[grassVariantAt(col, row)] || G.grassVariants[0];
+    return v || G.images.grass || null;
   }
   return G.images[id] || null;
 }
@@ -137,7 +143,7 @@ export function buildPool() {
 }
 export function buildShadows() {
   G.poolSprite = buildPool();
-  for (const img of [...G.stageImages, ...G.treeImages, ...allOreImages(), ...Object.values(G.resImages), ...allBuildingImages()]) {
+  for (const img of [...G.stageImages, ...G.treeImages, ...allOreImages(), ...Object.values(G.resImages), ...allBuildingImages(), ...(G.decorImages || [])]) {
     if (img && img.complete && img.naturalWidth) img._shadow = buildShadow(img);
   }
 }
@@ -162,6 +168,21 @@ export function loadImages() {
   }
   GD.objects.tree.stageSprites.forEach((src, i) => queue(G.stageImages, i, src));
   GD.objects.tree.matureSprites.forEach((src, i) => queue(G.treeImages, i, src));
+  // Grass tile variants (biome-selected per cell; index 0 = base grass.png).
+  const grassVariants = (GD.worldgen.grass && GD.worldgen.grass.variants) || [];
+  G.grassVariants = [];
+  grassVariants.forEach((src, i) => {
+    const img = (G.grassVariants[i] = new Image());
+    pending.push(new Promise((res) => { img.onload = res; img.onerror = res; img.src = src; }));
+  });
+  // Cosmetic ground-cover decoration sprites (flowers / grass patches), drawn as
+  // objects (lifted sprite + cast shadow) in the entity pass.
+  const decorSprites = (GD.worldgen.decor && GD.worldgen.decor.sprites) || [];
+  G.decorImages = [];
+  decorSprites.forEach((src, i) => {
+    const img = (G.decorImages[i] = new Image());
+    pending.push(new Promise((res) => { img.onload = res; img.onerror = res; img.src = src; }));
+  });
   // Mineable variant sprites, keyed by type id (rock, iron_vein, gold_vein).
   for (const typeId of MINEABLE_TYPES) {
     const arr = (G.oreImages[typeId] = []);

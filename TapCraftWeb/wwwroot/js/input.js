@@ -19,15 +19,29 @@ function pointerPos(e) {
   const rect = canvas.getBoundingClientRect();
   return { x: e.clientX - rect.left, y: e.clientY - rect.top };
 }
+// Begin a camera-pan drag: capture the pointer (so it keeps tracking off-canvas) and
+// snapshot the start point + camera. Used by the RIGHT mouse button and by touch/pen
+// drags on empty ground (touch/pen have no right button).
+function startPan(e) {
+  canvas.setPointerCapture(e.pointerId);
+  G.panning = true;
+  G.panStart = { x: e.clientX, y: e.clientY, camX: G.cam.x, camY: G.cam.y };
+  canvas.classList.add("dragging");
+}
 // First user gesture anywhere (incl. main-menu buttons) unlocks + starts audio.
 // Browsers keep the AudioContext suspended until a gesture; this resumes it once.
 window.addEventListener("pointerdown", resumeAudio);
 window.addEventListener("keydown", resumeAudio);
 
 canvas.addEventListener("pointerdown", (e) => {
-  if (G.inMenu || e.button !== 0) return; // left button only
+  if (G.inMenu) return;
   const p = pointerPos(e);
   G.mouse.x = p.x; G.mouse.y = p.y; G.mouse.on = true;
+
+  // RIGHT mouse button pans the camera (drag); never harvests/selects/places and leaves
+  // any selection intact. The browser context menu is suppressed below so the drag works.
+  if (e.button === 2) { startPan(e); return; }
+  if (e.button !== 0) return; // left button is the only other handled button
 
   // Placement mode: click places the building at the snapped footprint (cursor
   // anchors the front tile). Never pans/harvests. Stays in buildMode on a bad
@@ -49,9 +63,9 @@ canvas.addEventListener("pointerdown", (e) => {
   }
 
   canvas.setPointerCapture(e.pointerId);
-  // Pressing a harvestable object starts a harvest-hold (locked to its kind);
-  // pressing empty ground/water pans the camera (and deselects any building).
-  // Harvesting is disabled while the sim is paused - a click then pans instead.
+  // LEFT on a harvestable object starts a harvest-hold (locked to its kind); LEFT on
+  // empty ground/water just deselects any building (panning is the RIGHT button now).
+  // Harvesting is disabled while the sim is paused.
   const obj = G.running ? objectAt(p.x, p.y) : null;
   if (obj) {
     G.harvesting = true;
@@ -63,11 +77,12 @@ canvas.addEventListener("pointerdown", (e) => {
   } else {
     G.selectedBuilding = null;   // click on empty space deselects
     onBuildingSelected(null);
-    G.panning = true;
-    G.panStart = { x: e.clientX, y: e.clientY, camX: G.cam.x, camY: G.cam.y };
-    canvas.classList.add("dragging");
+    // Touch/pen have no right button, so they keep drag-to-pan on empty ground.
+    if (e.pointerType !== "mouse") startPan(e);
   }
 });
+// Right-drag pans, so suppress the canvas context menu (otherwise it pops mid-drag).
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 canvas.addEventListener("pointermove", (e) => {
   const p = pointerPos(e);
   G.mouse.x = p.x; G.mouse.y = p.y; G.mouse.on = true;

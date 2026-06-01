@@ -112,8 +112,10 @@ export function updateDayCounter() {
 export function generateMenuWorld() {
   G.world.id = null;
   G.world.name = "";
-  // Same defaults as a new world, but the menu island uses a denser forest.
-  const settings = { ...GD.defaults.worldSettings, forestDensity: GD.defaults.menuForestDensity };
+  // Same defaults as a new world, but the menu island uses a denser forest. Stamp
+  // the current genVersion so the menu island showcases the richer generation (it is
+  // a small falloff world, so continent shaping stays off -> single island preserved).
+  const settings = { ...GD.defaults.worldSettings, forestDensity: GD.defaults.menuForestDensity, genVersion: GD.worldgen.genVersion };
   generate(MENU_SIZE, MENU_SIZE, randomSeed(), settings);
   fitMenu();
 }
@@ -230,6 +232,24 @@ export function createWorld() {
     rockDensity: pct(ui.rockDensity, "rockDensity"),
     rockCluster: pct(ui.rockCluster, "rockCluster"),
     mineral: pct(ui.mineral, "mineral"),
+    // Procedural generation version, stamped on NEW worlds so they get the richer
+    // terrain (continents, highland stone/dirt, slope beaches, biome forests). Old
+    // saves lack this field and read as legacy v1 in cells.js, preserving their
+    // exact terrain shape + tile classes. Never default this in defaults.worldSettings.
+    genVersion: GD.worldgen.genVersion,
+    // Biomes + decoration. Size/density/clustering are 0..1 fractions; biome weights
+    // are integers partitioning the land (highland by elevation, the rest by moisture).
+    biomeSize: pct(ui.biomeSize, "biomeSize"),
+    decorDensity: pct(ui.decorDensity, "decorDensity"),
+    decorCluster: pct(ui.decorCluster, "decorCluster"),
+    biomeWeights: {
+      dry: intOf(ui.weightDry, "weightDry"),
+      plains: intOf(ui.weightPlains, "weightPlains"),
+      meadow: intOf(ui.weightMeadow, "weightMeadow"),
+      forest: intOf(ui.weightForest, "weightForest"),
+      jungle: intOf(ui.weightJungle, "weightJungle"),
+      highland: intOf(ui.weightHighland, "weightHighland"),
+    },
     // Ambient + weather (per-world, persisted in G.world.settings; consumers read
     // these with a GD fallback so old saves and the menu preview still work).
     bugs: intOf(ui.bugs, "bugs"),
@@ -292,6 +312,26 @@ export function wireUi() {
   bindSlider(ui.rockDensity, ui.rockDensityVal, (v) => `${v}%`);
   bindSlider(ui.rockCluster, ui.rockClusterVal, (v) => `${v}%`);
   bindSlider(ui.mineral, ui.mineralVal, (v) => `${v}%`);
+
+  // Biome + decoration sliders (bounds/defaults from GD.sliders, same as above).
+  applySliderAttrs(ui.biomeSize, "biomeSize");
+  applySliderAttrs(ui.decorDensity, "decorDensity");
+  applySliderAttrs(ui.decorCluster, "decorCluster");
+  applySliderAttrs(ui.weightMeadow, "weightMeadow");
+  applySliderAttrs(ui.weightPlains, "weightPlains");
+  applySliderAttrs(ui.weightDry, "weightDry");
+  applySliderAttrs(ui.weightForest, "weightForest");
+  applySliderAttrs(ui.weightJungle, "weightJungle");
+  applySliderAttrs(ui.weightHighland, "weightHighland");
+  bindSlider(ui.biomeSize, ui.biomeSizeVal, (v) => `${v}%`);
+  bindSlider(ui.decorDensity, ui.decorDensityVal, (v) => `${v}%`);
+  bindSlider(ui.decorCluster, ui.decorClusterVal, (v) => `${v}%`);
+  bindSlider(ui.weightMeadow, ui.weightMeadowVal, (v) => `${v}`);
+  bindSlider(ui.weightPlains, ui.weightPlainsVal, (v) => `${v}`);
+  bindSlider(ui.weightDry, ui.weightDryVal, (v) => `${v}`);
+  bindSlider(ui.weightForest, ui.weightForestVal, (v) => `${v}`);
+  bindSlider(ui.weightJungle, ui.weightJungleVal, (v) => `${v}`);
+  bindSlider(ui.weightHighland, ui.weightHighlandVal, (v) => `${v}`);
 
   // Ambient and weather sliders: pull their min/max/step/value from GD.sliders
   // (single source of truth, same as the size slider above) then bind the live

@@ -95,6 +95,8 @@ export const G = {
   waterImages: {}, // key -> array of WATER_FRAMES Images
   stageImages: [],
   treeImages: [],
+  grassVariants: [],  // grass tile sprite variants (index 0 = base grass.png), picked per-cell by biome
+  decorImages: [],    // cosmetic ground-cover sprites (flowers/grass patches), drawn as objects
 
   // A radial black->transparent disc, baked once and reused as the soft
   // grounding pool under every object (cheaper than a per-frame gradient).
