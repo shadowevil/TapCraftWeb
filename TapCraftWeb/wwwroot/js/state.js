@@ -32,6 +32,7 @@ export const G = {
     craft: null,   // { <craftableId>: { remaining, elapsed } } in-progress batches
     buildings: [], // [{ id, type, col, row, facing, produced:{<res>:n} }] placed buildings
     timeOfDay: 0.3, // day/night phase: 0=midnight, 0.25=sunrise, 0.5=noon, 0.75=sunset
+    day: 1,         // in-game day counter (increments each full day/night loop; new world = 1)
     tick: 0,
   },
 
@@ -47,6 +48,7 @@ export const G = {
 
   cam: { x: 0, y: 0, zoom: 2 },
   camRestored: false,         // true when loadWorld restored a saved camera (skip fit/spawn)
+  pendingPanels: null,        // saved craft/build panel layout from loadWorld, applied in startGame
   running: false,
   hasWorld: false,
   inMenu: false,

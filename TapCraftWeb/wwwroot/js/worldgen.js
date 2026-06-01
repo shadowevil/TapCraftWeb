@@ -29,6 +29,7 @@ export function generate(cols, rows, seed, settings) {
   G.world.gold_ingot = 0;
   G.world.tools = newTools();
   G.world.craft = {};
+  G.world.day = 1; // new world starts on day 1
   G.world.buildings = [];
   resetTransients();
   initWorldGen(G.world.seed, G.world.settings); // noise closures + land threshold + spawn

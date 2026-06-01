@@ -25,7 +25,7 @@ import { PERF, pBegin, pEnd, pCount } from "./perf.js";
 import { renderAmbient, ambientCounts } from "./ambient.js";
 import { envTint, shadowMul, weatherDim, weatherCloud, weatherRain, weatherKind } from "./env.js";
 import { renderRain, renderLightning, activeSplashes, drawSplash } from "./weather.js";
-import { positionBuildingPanel, updateBuildHint } from "./ui.js";
+import { positionBuildingPanel, updateBuildHint, updateDayCounter, updateBuildPanel } from "./ui.js";
 
 // Sprite + placement for a plant cell (shared by render and hit-testing so
 // they always agree on size/lift/flip).
@@ -553,6 +553,8 @@ export function render() {
   // the current camera/selection (DOM overlays, updated once per rendered frame).
   positionBuildingPanel();
   updateBuildHint();
+  updateBuildPanel(); // live: brighten build entries as soon as they become affordable
+  updateDayCounter(); // reflect G.world.day in the "Day N" HUD counter
   pEnd("overlay", _o0);
 }
 
@@ -650,7 +652,7 @@ function drawDebugOverlay(z) {
   const tod = G.world.timeOfDay || 0, hh = Math.floor(tod * 24), mm = Math.floor((tod * 24 - hh) * 60);
   const phase = (tod < 0.21 || tod >= 0.79) ? "Night" : (tod < 0.31 ? "Dawn" : (tod < 0.69 ? "Day" : "Dusk"));
   const tn = envTint();
-  lines.push("env  " + (hh < 10 ? "0" + hh : hh) + ":" + (mm < 10 ? "0" + mm : mm) + " " + phase +
+  lines.push("env  day " + (G.world.day | 0 || 1) + "  " + (hh < 10 ? "0" + hh : hh) + ":" + (mm < 10 ? "0" + mm : mm) + " " + phase +
     "  t=" + tod.toFixed(3) + "  shadow " + shadowMul().toFixed(2) + "  dim " + (tn ? Math.round(tn.a * 100) : 0) + "%");
   lines.push("weather  " + weatherKind() + "  cloud " + Math.round(weatherCloud() * 100) + "%  rain " +
     Math.round(weatherRain() * 100) + "%  wdim " + Math.round(weatherDim() * 100) + "%");

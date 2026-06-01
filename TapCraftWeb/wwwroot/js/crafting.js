@@ -8,6 +8,7 @@ import { craftPanel, craftListEl, craftedHud } from "./dom.js";
 import { updateResourceUI } from "./ui.js";
 import { addTool } from "./resources.js";
 import { buildingExists } from "./buildings.js";
+import { saveWorld } from "./persistence.js";
 
 // Recipe name/icon are not stored on the recipe (deduped): they come from the
 // tool the recipe produces.
@@ -90,6 +91,7 @@ export function startCraft(id, amount) {
   const job = G.world.craft[id] || (G.world.craft[id] = { remaining: 0, elapsed: 0, charged: false });
   job.remaining += add;
   updateCraftPanel();
+  saveWorld(); // persist the queue change so a queued craft is never lost on reload
 }
 
 // Cancel a queue: keep the in-progress unit (it finishes), drop all pending.
@@ -99,6 +101,7 @@ export function cancelCraft(id) {
   if (job.charged) job.remaining = 1; // the active unit was paid for; let it finish
   else delete G.world.craft[id];
   updateCraftPanel();
+  saveWorld(); // persist the cancellation (refunded pending units) immediately
 }
 
 // The single job currently crafting: the first queued one (insertion order).
@@ -125,6 +128,11 @@ export function advanceCrafting(dtMs) {
         for (const res of Object.keys(c)) G.world[res] -= c[res];
         job.charged = true;
         updateResourceUI();
+        // A unit was just PAID FOR. Persist now (once per unit, not per tick) so the
+        // deducted resources + in-progress unit survive a tab close / reload and the
+        // unit is resumed (charged=true) instead of being lost. This is the core of
+        // the craft data-loss fix.
+        saveWorld();
       }
     }
     if (job.charged) {
@@ -136,6 +144,7 @@ export function advanceCrafting(dtMs) {
         job.charged = false;
         addTool(GD.crafting.recipes[id].tool);
         if (job.remaining <= 0) delete G.world.craft[id];
+        saveWorld(); // persist the finished tool (and the emptied/decremented job)
       }
     }
   }

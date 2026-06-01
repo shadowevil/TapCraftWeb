@@ -1216,3 +1216,14 @@ body.tc-menu-mode .tc-events { display: none; }
   padding: 7px;
   font-size: 13px;
 }
+
+/* Day counter in the sub-bar (Day N): mirrors the resource counters' text. */
+.tc-day-counter {
+  margin-left: auto;
+  align-self: center;
+  padding: 0 8px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #f3ead6;
+  white-space: nowrap;
+}

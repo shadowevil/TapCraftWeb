@@ -45,6 +45,7 @@
         <img id="tc-gold_coin-icon" src="/assets/icons/icon_gold_coin.png" alt="Gold Coin" />
         <span id="tc-gold_coin-count">0</span>
     </div>
+    <div id="tc-day-counter" class="tc-day-counter" title="Day">Day 1</div>
 </div>
 
 <div class="tc-playback">
@@ -228,7 +229,11 @@
         </div>
         <div class="tc-row">
             <div class="tc-row-head"><label for="tc-day-minutes">Day length (min)</label><span id="tc-day-minutes-val" class="tc-val"></span></div>
-            <input id="tc-day-minutes" class="tc-range" type="range" min="4" max="40" step="1" value="16" />
+            <input id="tc-day-minutes" class="tc-range" type="range" min="4" max="40" step="1" value="10" />
+        </div>
+        <div class="tc-row">
+            <div class="tc-row-head"><label for="tc-night-minutes">Night length (min)</label><span id="tc-night-minutes-val" class="tc-val"></span></div>
+            <input id="tc-night-minutes" class="tc-range" type="range" min="4" max="40" step="1" value="6" />
         </div>
         <div class="tc-row">
             <div class="tc-row-head"><label for="tc-rain-intensity">Rain and storm intensity</label><span id="tc-rain-intensity-val" class="tc-val"></span></div>

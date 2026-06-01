@@ -29,6 +29,7 @@ export const buildCloseBtn = el("tc-build-close");
 export const buildListEl = el("tc-build-list");
 export const buildingPanel = el("tc-building-panel");
 export const craftedHud = el("tc-crafted");
+export const dayCounterEl = el("tc-day-counter");
 export const craftPanel = el("tc-craft-panel");
 export const craftTitlebar = el("tc-craft-titlebar");
 export const craftCloseBtn = el("tc-craft-close");
@@ -62,6 +63,7 @@ export const ui = {
   clouds: el("tc-clouds"), cloudsVal: el("tc-clouds-val"),
   weatherFreq: el("tc-weather-freq"), weatherFreqVal: el("tc-weather-freq-val"),
   dayMinutes: el("tc-day-minutes"), dayMinutesVal: el("tc-day-minutes-val"),
+  nightMinutes: el("tc-night-minutes"), nightMinutesVal: el("tc-night-minutes-val"),
   rainIntensity: el("tc-rain-intensity"), rainIntensityVal: el("tc-rain-intensity-val"),
   weightClear: el("tc-weight-clear"), weightClearVal: el("tc-weight-clear-val"),
   weightCloudy: el("tc-weight-cloudy"), weightCloudyVal: el("tc-weight-cloudy-val"),

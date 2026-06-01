@@ -1,0 +1,14 @@
+224|            <input id="tc-clouds" class="tc-range" type="range" min="0" max="40" step="1" value="22" />
+225|        </div>
+226|        <div class="tc-row">
+227|            <div class="tc-row-head"><label for="tc-weather-freq">Weather change (avg min)</label><span id="tc-weather-freq-val" class="tc-val"></span></div>
+228|            <input id="tc-weather-freq" class="tc-range" type="range" min="0.5" max="10" step="0.5" value="2.5" />
+229|        </div>
+230|        <div class="tc-row">
+231|            <div class="tc-row-head"><label for="tc-day-minutes">Day length (min)</label><span id="tc-day-minutes-val" class="tc-val"></span></div>
+232|            <input id="tc-day-minutes" class="tc-range" type="range" min="4" max="40" step="1" value="16" />
+233|        </div>
+234|        <div class="tc-row">
+235|            <div class="tc-row-head"><label for="tc-rain-intensity">Rain and storm intensity</label><span id="tc-rain-intensity-val" class="tc-val"></span></div>
+236|            <input id="tc-rain-intensity" class="tc-range" type="range" min="0.3" max="2" step="0.1" value="1" />
+237|        </div>

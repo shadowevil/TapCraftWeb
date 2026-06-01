@@ -12,12 +12,12 @@ import {
   playBtn, pauseBtn, menuModal, mainMenuScreen, worldListEl,
   newWorldModal, confirmModal, nameInput, ui,
   buildBtn, buildHint, buildPanel, buildTitlebar, buildCloseBtn, buildListEl, buildingPanel,
-  optionsModal, audioRowsEl, eventsEl,
+  optionsModal, audioRowsEl, eventsEl, dayCounterEl,
 } from "./dom.js";
 import { fitView, buildingAnchor, centerCameraOn, minZoom } from "./iso.js";
 import { generate } from "./worldgen.js";
 import {
-  readWorldsIndex, saveWorld, loadWorld, deleteWorld, newWorldId,
+  readWorldsIndex, saveWorld, loadWorld, deleteWorld, newWorldId, applyPanels,
 } from "./persistence.js";
 import { setRunning, updatePlayPause } from "./sim.js";
 import { buildCraftPanel, toggleCraftPanel } from "./crafting.js";
@@ -91,6 +91,22 @@ export function startGame() {
   }
   updatePlayPause();
   setWorldAudioPaused(!G.running); // match the world/ambient audio duck to the loaded running state
+  // Restore the draggable craft/build panel positions + open state saved with this
+  // world (no-op for a fresh world / when nothing was saved). Done here, after the
+  // panels exist and the world is shown, so the layout reappears as the player left it.
+  if (G.pendingPanels) { applyPanels(G.pendingPanels); G.pendingPanels = null; }
+  updateDayCounter();
+}
+
+// Update the "Day N" HUD counter from G.world.day. Reads state directly (no
+// cross-module import) so render.js / startGame can call it cheaply each frame.
+let lastDayShown = -1;
+export function updateDayCounter() {
+  if (!dayCounterEl) return;
+  const d = G.world.day | 0 || 1;
+  if (d === lastDayShown) return; // only touch the DOM when the day actually changes
+  lastDayShown = d;
+  dayCounterEl.textContent = "Day " + d;
 }
 
 export function generateMenuWorld() {
@@ -221,6 +237,7 @@ export function createWorld() {
     cloudCount: intOf(ui.clouds, "clouds"),
     weatherFreq: floatOf(ui.weatherFreq, "weatherFreq"),
     dayMinutes: intOf(ui.dayMinutes, "dayMinutes"),
+    nightMinutes: intOf(ui.nightMinutes, "nightMinutes"),
     rainIntensity: floatOf(ui.rainIntensity, "rainIntensity"),
     weights: {
       clear: intOf(ui.weightClear, "weightClear"),
@@ -284,6 +301,7 @@ export function wireUi() {
   applySliderAttrs(ui.clouds, "clouds");
   applySliderAttrs(ui.weatherFreq, "weatherFreq");
   applySliderAttrs(ui.dayMinutes, "dayMinutes");
+  applySliderAttrs(ui.nightMinutes, "nightMinutes");
   applySliderAttrs(ui.rainIntensity, "rainIntensity");
   applySliderAttrs(ui.weightClear, "weightClear");
   applySliderAttrs(ui.weightCloudy, "weightCloudy");
@@ -294,6 +312,7 @@ export function wireUi() {
   bindSlider(ui.clouds, ui.cloudsVal, (v) => `${v}`);
   bindSlider(ui.weatherFreq, ui.weatherFreqVal, (v) => `${Number(v).toFixed(1)} min`);
   bindSlider(ui.dayMinutes, ui.dayMinutesVal, (v) => `${v} min`);
+  bindSlider(ui.nightMinutes, ui.nightMinutesVal, (v) => `${v} min`);
   bindSlider(ui.rainIntensity, ui.rainIntensityVal, (v) => `${Number(v).toFixed(1)}x`);
   bindSlider(ui.weightClear, ui.weightClearVal, (v) => `${v}`);
   bindSlider(ui.weightCloudy, ui.weightCloudyVal, (v) => `${v}`);
@@ -346,6 +365,7 @@ export function wireUi() {
 
   // Build UI: a floating, draggable panel mirroring the craft panel.
   buildBtn.addEventListener("click", toggleBuildPanel);
+  buildBuildPanel(); // pre-populate now (mirrors buildCraftPanel above) so a restored-open build panel has content; reads only static GD.buildings, safe before a world exists. Root cause of the "build loads empty until reopened" bug: content was only built inside toggleBuildPanel, which applyPanels(restore) never calls.
   buildCloseBtn.addEventListener("click", () => buildPanel.classList.add("hidden"));
   makeDraggable(buildPanel, buildTitlebar);
   el("tc-bpanel-receive").addEventListener("click", () => {
@@ -461,6 +481,13 @@ function markAffordability() {
 export function toggleBuildPanel() {
   buildPanel.classList.toggle("hidden");
   if (!buildPanel.classList.contains("hidden")) buildBuildPanel();
+}
+// Live affordability refresh, mirroring how the craft panel re-runs updateCraftPanel
+// each frame while open: entries brighten (lose tc-unaffordable) the moment you can
+// afford them. Called per frame from render.js; cheap (a handful of buildings).
+export function updateBuildPanel() {
+  if (buildPanel.classList.contains("hidden")) return;
+  markAffordability();
 }
 
 // --- Options modal: sound channels -----------------------------------

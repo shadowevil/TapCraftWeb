@@ -30,12 +30,28 @@ function weatherInterval() {
   return { min: dmin, max: dmax };
 }
 function rollInterval() { const iv = weatherInterval(); return iv.min + Math.random() * (iv.max - iv.min); }
-// Full day/night cycle length (ms): per-world dayMinutes if set, else gamedata.
-function cycleMs() {
+// Real-time ms the LIT half of the cycle (sunrise..sunset) should take: per-world
+// dayMinutes if set, else GD.daynight.dayMs, else half the full cycle.
+function dayHalfMs() {
   const s = ws(), dn = GD.daynight || {};
   if (s && typeof s.dayMinutes === "number" && isFinite(s.dayMinutes) && s.dayMinutes > 0) return s.dayMinutes * 60000;
-  return dn.cycleMs || 960000;
+  if (typeof dn.dayMs === "number" && dn.dayMs > 0) return dn.dayMs;
+  return (dn.cycleMs || 960000) / 2;
 }
+// Real-time ms the DARK half (sunset..sunrise) should take: per-world nightMinutes
+// if set, else GD.daynight.nightMs, else half the full cycle.
+function nightHalfMs() {
+  const s = ws(), dn = GD.daynight || {};
+  if (s && typeof s.nightMinutes === "number" && isFinite(s.nightMinutes) && s.nightMinutes > 0) return s.nightMinutes * 60000;
+  if (typeof dn.nightMs === "number" && dn.nightMs > 0) return dn.nightMs;
+  return (dn.cycleMs || 960000) / 2;
+}
+// Full day/night cycle length (ms) = day half + night half. Kept for any callers
+// that want the total (none in-tree currently, but exported behavior preserved).
+function cycleMs() { return dayHalfMs() + nightHalfMs(); }
+// True when the time-of-day phase `t` is in the LIT half (sunrise 0.25 .. sunset
+// 0.75). Matches sunElev() >= 0; the complement is the dark half.
+function isDayPhase(t) { return t >= 0.25 && t < 0.75; }
 // Per-world weight for a weather kind, falling back to the state's own weight.
 function weightFor(kind, fallback) {
   const s = ws();
@@ -73,9 +89,20 @@ function rollWeather(w) {
 export function updateEnv(dtMs) {
   const dn = GD.daynight;
   if (dn) {
-    let t = (G.world.timeOfDay || 0) + dtMs / cycleMs();
-    t -= Math.floor(t); // wrap to [0,1)
+    // Non-uniform advance: each HALF of the cycle (lit [0.25,0.75), dark otherwise)
+    // consumes its own configured real-time minutes. The per-ms phase increment for
+    // the current half = 0.5 / (halfMs), so a half always covers exactly 0.5 of the
+    // phase in its configured time regardless of the other half's length.
+    const prev = G.world.timeOfDay || 0;
+    const halfMs = isDayPhase(prev) ? dayHalfMs() : nightHalfMs();
+    let t = prev + dtMs * (0.5 / Math.max(1, halfMs));
+    // A "new day" begins at the midnight wrap (phase crosses 1 -> 0). One full loop
+    // can span at most one wrap per call (dt is a single tick), so a simple
+    // wrapped-below-previous test is sufficient.
+    let wrapped = false;
+    if (t >= 1) { t -= Math.floor(t); wrapped = true; }
     G.world.timeOfDay = t;
+    if (wrapped) G.world.day = (G.world.day | 0 || 1) + 1; // increment the day counter on the midnight wrap
     const night = sunElev() < 0;
     if (night !== lastNight) { lastNight = night; setAmbienceMode(night ? "night" : "day"); }
   }

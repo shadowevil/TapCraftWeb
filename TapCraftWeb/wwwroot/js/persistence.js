@@ -92,6 +92,42 @@ export function sanitizeBuildings(saved) {
   return out;
 }
 
+// --- Panel layout (craft/build draggable panels) ---------------------
+// makeDraggable() writes panel.style.left/top (px) as the player drags; open/
+// closed is the .hidden class. We snapshot both per panel so the layout is
+// restored on reload (see applyPanels). The DOM is read by id directly to avoid
+// importing dom.js (which would add an import edge); a missing panel yields null.
+const PANEL_IDS = { craft: "tc-craft-panel", build: "tc-build-panel" };
+function panelPos(elm) {
+  if (!elm) return null;
+  // style.left/top are only set once the panel has been dragged; fall back to
+  // null (CSS default position) otherwise so we never pin an undragged panel to 0,0.
+  const left = elm.style.left, top = elm.style.top;
+  return {
+    left: left || null,
+    top: top || null,
+    open: !elm.classList.contains("hidden"),
+  };
+}
+function capturePanels() {
+  const out = {};
+  for (const key of Object.keys(PANEL_IDS)) out[key] = panelPos(document.getElementById(PANEL_IDS[key]));
+  return out;
+}
+// Restore saved panel positions + open state. Robust to missing panels/values:
+// only a real px string is applied, and open state is only honored if present.
+export function applyPanels(saved) {
+  if (!saved || typeof saved !== "object") return;
+  for (const key of Object.keys(PANEL_IDS)) {
+    const s = saved[key];
+    const elm = document.getElementById(PANEL_IDS[key]);
+    if (!elm || !s) continue;
+    if (typeof s.left === "string" && s.left) { elm.style.left = s.left; elm.style.right = "auto"; }
+    if (typeof s.top === "string" && s.top) elm.style.top = s.top;
+    if (typeof s.open === "boolean") elm.classList.toggle("hidden", !s.open);
+  }
+}
+
 // --- Persistence (multiple worlds) -----------------------------------
 export function readWorldsIndex() {
   try { const a = JSON.parse(localStorage.getItem(WORLDS_KEY)); return Array.isArray(a) ? a : []; }
@@ -107,7 +143,7 @@ export function saveWorld() {
     // sparse map of modified cells (G.world.mods) is persisted, so even an infinite
     // world's save stays small (it grows only with what the player changes).
     localStorage.setItem(worldKey(G.world.id), JSON.stringify({
-      version: 11, id: G.world.id, name: G.world.name,
+      version: 12, id: G.world.id, name: G.world.name,
       infinite: G.world.infinite, cols: G.world.cols, rows: G.world.rows, seed: G.world.seed,
       settings: G.world.settings,
       landThreshold: G.world.landThreshold, spawn: G.world.spawn,
@@ -119,7 +155,10 @@ export function saveWorld() {
       buildings: G.world.buildings.map((b) => ({ id: b.id, type: b.type, col: b.col, row: b.row, facing: b.facing,
         produced: b.produced, stored: b.stored, tools: b.tools, oreStored: b.oreStored, ingots: b.ingots, fuel: b.fuel })),
       drops: G.drops.filter((d) => d.phase === "rest").map((d) => ({ kind: d.kind, gx: d.gx, gy: d.gy })),
-      timeOfDay: G.world.timeOfDay, tick: G.world.tick, running: G.running,
+      timeOfDay: G.world.timeOfDay, day: G.world.day | 0, tick: G.world.tick, running: G.running,
+      // Per-world UI layout: the draggable craft/build panels' last position + open
+      // state, so they reappear where the player left them (see capturePanels/ui.js).
+      panels: capturePanels(),
     }));
     localStorage.setItem(CURRENT_KEY, G.world.id);
     const list = readWorldsIndex();
@@ -161,10 +200,23 @@ export function loadWorld(id) {
     G.world.gold_ingot = d.gold_ingot | 0;
     G.world.gold_coin = d.gold_coin | 0;
     G.world.tools = sanitizeTools(d.tools);
+    // Craft data-loss fix. ROOT CAUSE: in-progress crafts were saved, but the only
+    // saves happened on explicit pause/play, deposits, etc - NOT when a craft was
+    // queued or charged. So queueing a craft deducted resources in memory only;
+    // leaving via a path that did not save (tab close, reload) then restored the
+    // PRE-craft save, and the half-done unit (already charged in the lost session)
+    // never finished -> the player saw resources spent with no tool delivered.
+    // FIX: (1) always normalize the loaded craft to a valid per-recipe map here
+    // (sanitizeCraft never returns null and keeps each job's `charged`+`elapsed`,
+    // so advanceCrafting RESUMES a half-done unit without re-charging and delivers
+    // the tool on completion); (2) save at craft state-changes + a beforeunload
+    // autosave (crafting.js / main.js) so the charged unit always reaches disk.
     G.world.craft = sanitizeCraft(d.craft);
     G.world.buildings = sanitizeBuildings(d.buildings);
     G.world.tick = d.tick || 0;
     G.world.timeOfDay = (typeof d.timeOfDay === "number") ? d.timeOfDay : 0.3;
+    // Day counter: default 1 so pre-v12 saves (no `day`) start on day 1.
+    G.world.day = (d.day | 0) > 0 ? (d.day | 0) : 1;
     resetTransients(); // also clears building worker/selection transients
     const savedDrops = Array.isArray(d.drops) ? d.drops : (Array.isArray(d.logs) ? d.logs.map((p) => ({ kind: "wood", gx: p.gx, gy: p.gy })) : []);
     G.drops = savedDrops.map((p) => ({ kind: p.kind || "wood", gx: p.gx, gy: p.gy, vx: 0, vy: 0, z: 0, vz: 0, phase: "rest" }));
@@ -173,6 +225,8 @@ export function loadWorld(id) {
     if (d.cam && typeof d.cam.zoom === "number") {
       G.cam.x = d.cam.x; G.cam.y = d.cam.y; G.cam.zoom = d.cam.zoom; G.camRestored = true;
     }
+    // Stash saved panel layout; startGame() applies it after the panels exist.
+    G.pendingPanels = d.panels || null;
     localStorage.setItem(CURRENT_KEY, G.world.id);
     updateResourceUI();
     updateCraftedHud();
