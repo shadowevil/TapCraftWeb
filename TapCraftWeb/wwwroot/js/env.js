@@ -7,6 +7,8 @@
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
 import { setAmbienceMode } from "./sound.js";
+import { viewCenterCell } from "./iso.js";
+import { globeWeatherAt } from "./globeweather.js";
 
 let lastNight = null;
 
@@ -109,8 +111,18 @@ export function updateEnv(dtMs) {
   const cw = GD.weather;
   if (cw) {
     const w = weatherState();
-    w.timer -= dtMs;
-    if (w.timer <= 0) rollWeather(w);
+    if (G.world.wrapX) {
+      // Globe: INDEPENDENT REGIONAL weather. Sample the climate-driven field at the view
+      // centre, so weather changes as you travel and resumes on reload (it is a function of
+      // the world clock). The global random state machine below is skipped entirely here.
+      const { c: cc, r: cr } = viewCenterCell();
+      const gw = globeWeatherAt(cc, cr);
+      w.tcloud = gw.cloud; w.train = gw.rain; w.kind = gw.kind;
+    } else {
+      // Flat / infinite: the global weighted-random state machine.
+      w.timer -= dtMs;
+      if (w.timer <= 0) rollWeather(w);
+    }
     const k = Math.min(1, dtMs / (cw.easeMs || 16000)); // ease live levels toward the target
     w.cloud += (w.tcloud - w.cloud) * k;
     w.rain += (w.train - w.rain) * k;

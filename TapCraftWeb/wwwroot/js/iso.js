@@ -57,6 +57,15 @@ export function visibleCellBounds() {
   };
 }
 
+// The cell at the CENTER of the current view (midpoint of the visible cell box). Several systems
+// sample "where the player is looking" from here - growth (sim.js), regional weather (env.js),
+// the forecast widget, and the wetness status readout - so the definition lives in one place
+// instead of being re-derived identically at each call site.
+export function viewCenterCell() {
+  const vb = visibleCellBounds();
+  return { c: Math.round((vb.c0 + vb.c1) / 2), r: Math.round((vb.r0 + vb.r1) / 2) };
+}
+
 // Top-left of a sprite drawn on cell-anchor `s` (shared by sprite + shadow).
 export function spriteRect(img, s, z, lift, sc) {
   const w = img.naturalWidth || img.width || SPRITE;

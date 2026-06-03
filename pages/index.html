@@ -62,14 +62,40 @@
     <div id="tc-day-counter" class="tc-day-counter" title="Day">Day 1</div>
 </div>
 
-<div class="tc-playback">
-    <button id="tc-play" class="tc-icon-btn" type="button" aria-label="Play" title="Play">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l11 7-11 7z" /></svg>
-    </button>
-    <button id="tc-pause" class="tc-icon-btn" type="button" aria-label="Pause" title="Pause">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3v14H7zM14 5h3v14h-3z" /></svg>
-    </button>
+<!-- Right HUD stack (in-game): forecast + minimap panel, then playback below it -->
+<div class="tc-hud-right">
+    <div id="tc-forecast" class="tc-forecast" title="Conditions in your area">
+        <div class="tc-minimap-wrap">
+            <canvas id="tc-minimap" class="tc-minimap" width="112" height="75"></canvas>
+            <div id="tc-mm-coords" class="tc-mm-coords" title="Hovered tile (col, row)">-, -</div>
+            <div class="tc-mm-zoom">
+                <button id="tc-mm-out" class="tc-mm-btn" type="button" aria-label="Zoom minimap out" title="Zoom out">-</button>
+                <button id="tc-mm-in" class="tc-mm-btn" type="button" aria-label="Zoom minimap in" title="Zoom in">+</button>
+            </div>
+        </div>
+        <div class="tc-fc-info">
+            <div id="tc-fc-cond" class="tc-fc-cond">Clear</div>
+            <div class="tc-fc-grid">
+                <span class="tc-fc-k">Cloud</span><span id="tc-fc-cloud" class="tc-fc-v">-</span>
+                <span class="tc-fc-k">Rain</span><span id="tc-fc-rain" class="tc-fc-v">-</span>
+                <span class="tc-fc-k">Temp</span><span id="tc-fc-temp" class="tc-fc-v">-</span>
+                <span class="tc-fc-k">Moisture</span><span id="tc-fc-moist" class="tc-fc-v">-</span>
+                <span class="tc-fc-k">Biome</span><span id="tc-fc-biome" class="tc-fc-v">-</span>
+            </div>
+        </div>
+    </div>
+    <div class="tc-playback">
+        <button id="tc-play" class="tc-icon-btn" type="button" aria-label="Play" title="Play">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l11 7-11 7z" /></svg>
+        </button>
+        <button id="tc-pause" class="tc-icon-btn" type="button" aria-label="Pause" title="Pause">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3v14H7zM14 5h3v14h-3z" /></svg>
+        </button>
+    </div>
 </div>
+
+<!-- Loading overlay (world generation + minimap pre-render) -->
+<div id="tc-loading" class="tc-loading hidden"><div class="tc-loading-box">Loading...</div></div>
 
 <!-- Crafted items HUD (floating icons under the left of the sub-bar) -->
 <div id="tc-crafted" class="tc-crafted"></div>

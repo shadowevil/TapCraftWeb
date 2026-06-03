@@ -21,6 +21,7 @@ import {
   readWorldsIndex, saveWorld, saveWorldNow, loadWorld, deleteWorld, newWorldId, applyPanels,
 } from "./persistence.js";
 import { setRunning, updatePlayPause } from "./sim.js";
+import { buildWorldMap } from "./minimap.js";
 import { buildCraftPanel, toggleCraftPanel } from "./crafting.js";
 import {
   findBuilding, demolishBuilding, buildingTargets,
@@ -97,6 +98,21 @@ export function hideOverlays() {
   confirmModal.classList.add("hidden");
 }
 
+// Loading overlay shown while a world is generated (rivers/lakes) + its minimap is pre-rendered.
+// enterWorld() shows it, then runs the heavy work on a DOUBLE rAF so the overlay actually paints
+// before the (blocking) generation freezes the thread.
+const loadingEl = el("tc-loading");
+export function showLoading(text) {
+  if (!loadingEl) return;
+  const box = loadingEl.firstElementChild; if (box) box.textContent = text || "Loading...";
+  loadingEl.classList.remove("hidden");
+}
+export function hideLoading() { if (loadingEl) loadingEl.classList.add("hidden"); }
+export function enterWorld(text, work) {
+  showLoading(text);
+  requestAnimationFrame(() => requestAnimationFrame(() => { try { work(); } finally { hideLoading(); } }));
+}
+
 export function startGame() {
   G.inMenu = false;
   document.body.classList.remove("tc-menu-mode");
@@ -122,6 +138,7 @@ export function startGame() {
   // panels exist and the world is shown, so the layout reappears as the player left it.
   if (G.pendingPanels) { applyPanels(G.pendingPanels); G.pendingPanels = null; }
   updateDayCounter();
+  try { buildWorldMap(); } catch (e) { /* non-fatal: the minimap lazy-builds on first draw */ }
 }
 
 // Update the "Day N" HUD counter from G.world.day. Reads state directly (no
@@ -205,7 +222,7 @@ export function renderWorldList() {
     const sizeLabel = w.size === 0 ? "Infinite" : (w.size ? `${w.size}x${w.size}` : "");
     label.textContent = sizeLabel ? `${w.name}  -  ${sizeLabel}` : w.name;
     play.append(ico, label);
-    play.addEventListener("click", () => { if (loadWorld(w.id)) startGame(); });
+    play.addEventListener("click", () => enterWorld("Loading world...", () => { if (loadWorld(w.id)) startGame(); }));
 
     const del = document.createElement("button");
     del.type = "button";
@@ -311,9 +328,11 @@ export function createWorld() {
   };
   G.world.id = newWorldId();
   G.world.name = (nameInput.value || suggestWorldName()).trim() || suggestWorldName();
-  generate(size, size, seed >>> 0, settings);
-  startGame();
-  setRunning(true); // start running + persist the new world
+  enterWorld("Generating world...", () => {
+    generate(size, size, seed >>> 0, settings);
+    startGame();
+    setRunning(true); // start running + persist the new world
+  });
 }
 
 export function bindSlider(input, valEl, fmt) {

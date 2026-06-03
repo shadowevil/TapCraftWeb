@@ -20,6 +20,8 @@ import {
 import { popFactor, dropImage, dropScreen } from "./resources.js";
 import { canPlaceFootprint, canAffordBuilding, buildingTargets, cellsInRange, hutToolKind, hutToolCount } from "./buildings.js";
 import { mineableAt, mineableSprite } from "./mineable.js";
+import { wetnessSize, wetnessAt } from "./wetness.js";
+import { globeWeatherAt } from "./globeweather.js";
 import { tileAt, stageAt, progressAt, chopAt, rockRawAt, baseCacheSize, decorAt, shoreDist, biomeAt, moistureAt, landHeightAt, uplandAt, wrapCol, wrapRow, hydroClassAt, iceAt, temperatureAt, snownessAt, desertAt, modsSize, clampBox } from "./cells.js";
 import * as glr from "./gl/glrender.js";
 import { uvFor } from "./gl/atlas.js";
@@ -28,6 +30,8 @@ import { renderAmbient, ambientCounts } from "./ambient.js";
 import { envTint, shadowMul, weatherDim, weatherCloud, weatherRain, weatherKind } from "./env.js";
 import { renderRain, renderLightning, activeSplashes, drawSplash } from "./weather.js";
 import { positionBuildingPanel, updateBuildHint, updateDayCounter, updateBuildPanel } from "./ui.js";
+import { updateForecast } from "./forecast.js";
+import { drawMinimap } from "./minimap.js";
 
 // Globe: buildings (and their rings/panel) are drawn from a LIST at their canonical
 // column, but the floor/objects wrap seamlessly by drawing the raw column. So shift a
@@ -912,6 +916,8 @@ export function render() {
   updateBuildHint();
   updateBuildPanel(); // live: brighten build entries as soon as they become affordable
   updateDayCounter(); // reflect G.world.day in the "Day N" HUD counter
+  updateForecast();   // local conditions widget (weather + climate in the player's area)
+  drawMinimap();      // coarse zoomable map in the forecast panel (re-renders only on move/zoom)
   pEnd("overlay", _o0);
 }
 
@@ -952,12 +958,31 @@ function applyEnvTint() {
 // Highlights the hovered cell and prints everything known about that tile and
 // any object on it (raw stage/rock/progress/chop, sprite dims, lift, screen
 // coords, draw order key). Toggled with the `debugoverlay` console command.
+// Rendered as three titled boxes - GLOBAL (stats), TILE (hovered cell), OBJECT (what
+// is on it) - stacked top-left and flowed into a new column to the right when they
+// would overflow the bottom of the viewport.
+const DBG_PAD = 8, DBG_LH = 15;
+function debugBoxSize(title, lines) {
+  let maxw = ctx.measureText(title).width;
+  for (const t of lines) { const w = ctx.measureText(t).width; if (w > maxw) maxw = w; }
+  return { w: maxw + DBG_PAD * 2, h: (lines.length + 1) * DBG_LH + DBG_PAD * 2 };
+}
+function drawDebugBox(title, lines, x, y, w, h) {
+  ctx.fillStyle = "rgba(6, 10, 20, 0.82)";
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = "rgba(0, 255, 255, 0.6)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = "#6fe9ff"; // title row
+  ctx.fillText(title, x + DBG_PAD, y + DBG_PAD);
+  ctx.fillStyle = "#dce6ff";
+  for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i], x + DBG_PAD, y + DBG_PAD + (i + 1) * DBG_LH);
+}
 function drawDebugOverlay(z) {
   const cell = G.hoverTile || G.hover;
-  const lines = [];
+  const gLines = [], tLines = [], oLines = []; // GLOBAL / TILE / OBJECT boxes
   if (!cell) {
-    lines.push("debug overlay ON");
-    lines.push("(hover a tile)");
+    tLines.push("(hover a tile)");
   } else {
     const c = cell.col, r = cell.row;
     const inB = inBounds(c, r);
@@ -969,33 +994,42 @@ function drawDebugOverlay(z) {
     const center = cellCenter(c, r);
     const s = worldToScreen(center.x, center.y);
     const tImg = inB ? tileSprite(tile, c, r, waterFrameIndex()) : null;
-    lines.push("cell  col=" + c + " row=" + r + "  (r+c=" + (c + r) + ")");
-    lines.push("screen  x=" + Math.round(s.x) + " y=" + Math.round(s.y) + "  zoom=" + z.toFixed(2));
-    lines.push("tile  '" + tile + "'" + (tImg ? "  sprite " + (tImg.naturalWidth || "?") + "x" + (tImg.naturalHeight || "?") : "  (no sprite)"));
-    lines.push("raw  stage=" + stage + " rock=" + rock + " progress=" + prog + " chop=" + chop);
+    tLines.push("cell  col=" + c + " row=" + r + "  (r+c=" + (c + r) + ")");
+    tLines.push("screen  x=" + Math.round(s.x) + " y=" + Math.round(s.y) + "  zoom=" + z.toFixed(2));
+    tLines.push("tile  '" + tile + "'" + (tImg ? "  sprite " + (tImg.naturalWidth || "?") + "x" + (tImg.naturalHeight || "?") : "  (no sprite)"));
+    tLines.push("raw  stage=" + stage + " rock=" + rock + " progress=" + prog + " chop=" + chop);
     // Biome classification + the fields that drive it (moisture, normalized height).
     // A water tile reports its hydrology class: ocean / lake / pond / river / stream.
     const hk = inB ? hydroClassAt(c, r) : null;
     const bi = inB ? (tile === "water" ? (hk || "water") : biomeAt(c, r)) : null;
-    lines.push("biome  " + (bi || "-") + "  moist=" + (inB ? moistureAt(c, r).toFixed(2) : "-") + " up=" + (inB ? uplandAt(c, r).toFixed(2) : "-") + " h=" + (inB ? landHeightAt(c, r).toFixed(2) : "-"));
+    tLines.push("biome  " + (bi || "-") + "  moist=" + (inB ? moistureAt(c, r).toFixed(2) : "-") + " up=" + (inB ? uplandAt(c, r).toFixed(2) : "-") + " h=" + (inB ? landHeightAt(c, r).toFixed(2) : "-"));
     // Globe climate (latitude band): temperature, snowiness, and whether water freezes.
-    if (inB && G.world.wrapX) lines.push("climate  temp=" + temperatureAt(c, r).toFixed(2) + " snow=" + snownessAt(c, r).toFixed(2) + " desert=" + desertAt(c, r).toFixed(2) + (iceAt(c, r) ? "  ICE" : ""));
+    if (inB && G.world.wrapX) tLines.push("climate  temp=" + temperatureAt(c, r).toFixed(2) + " snow=" + snownessAt(c, r).toFixed(2) + " desert=" + desertAt(c, r).toFixed(2) + (iceAt(c, r) ? "  ICE" : ""));
+    // Globe regional weather field at this cell (independent per region; drifts over time).
+    if (inB && G.world.wrapX) { const gw = globeWeatherAt(c, r); tLines.push("gweather  cloud=" + Math.round(gw.cloud * 100) + "% rain=" + Math.round(gw.rain * 100) + "% " + gw.kind); }
+    // Ground wetness (0..1 this tile), its drying-relevant moisture, and whether the
+    // surface can soak rain at all (terrain.wettable: stone + water stay dry).
+    if (inB) {
+      const wt = (GD.worldgen.terrain && GD.worldgen.terrain.wettable) || {};
+      const dry = tile === "water" || wt[tile] === false;
+      tLines.push("wetness  " + Math.round(wetnessAt(c, r) * 100) + "%  moist=" + moistureAt(c, r).toFixed(2) + (dry ? "  (surface stays dry)" : ""));
+    }
     // The object the renderer would draw here (rock takes precedence).
     const obj = inB ? cellObject(c, r) : null;
     if (obj) {
       const img = obj.img;
       const matureMark = (obj.kind === "tree") ? (obj.stage >= GD.matureStage ? " MATURE" : "") : "";
-      lines.push("object  " + obj.kind + (obj.kind === "tree" ? " stage=" + obj.stage + matureMark : " variant=" + obj.variant));
-      lines.push("  yOffset=" + obj.yOffset + " sc=" + (obj.sc || 1).toFixed(2) + " flip=" + (!!obj.flip));
-      lines.push("  sprite " + (img && img.naturalWidth || "?") + "x" + (img && img.naturalHeight || "?") + (img && img.complete ? "" : " (loading)"));
-      lines.push("  src " + ((img && img.src) ? img.src.split("/").pop() : "(none)"));
+      oLines.push("object  " + obj.kind + (obj.kind === "tree" ? " stage=" + obj.stage + matureMark : " variant=" + obj.variant));
+      oLines.push("  yOffset=" + obj.yOffset + " sc=" + (obj.sc || 1).toFixed(2) + " flip=" + (!!obj.flip));
+      oLines.push("  sprite " + (img && img.naturalWidth || "?") + "x" + (img && img.naturalHeight || "?") + (img && img.complete ? "" : " (loading)"));
+      oLines.push("  src " + ((img && img.src) ? img.src.split("/").pop() : "(none)"));
     } else {
-      lines.push("object  none");
+      oLines.push("object  none");
     }
     // A building whose footprint covers this cell?
     const bd = inB && G.world.buildings.find((bb) =>
       buildingCells(bb.col, bb.row).some(([bc, br]) => bc === c && br === r));
-    if (bd) lines.push("building  " + bd.type + " @(" + bd.col + "," + bd.row + ") tools=" + (bd.tools ? bd.tools.count : 0));
+    if (bd) oLines.push("building  " + bd.type + " @(" + bd.col + "," + bd.row + ") tools=" + (bd.tools ? bd.tools.count : 0));
     // Decoration (cosmetic ground cover) the renderer would draw here if the cell is
     // bare; notes when it is hidden because an object or building occupies the tile.
     const di = inB ? decorAt(c, r) : -1;
@@ -1003,12 +1037,12 @@ function drawDebugOverlay(z) {
       const dimg = G.decorImages[di];
       const dp = decorDrawParams(di, c, r);
       const hiddenBy = obj ? "object" : (bd ? "building" : null);
-      lines.push("decor  index=" + di + (hiddenBy ? "  (hidden: " + hiddenBy + ")" : ""));
-      if (dp) lines.push("  yOffset=" + dp.yOffset + " sc=" + dp.sc.toFixed(2) + " flip=" + (!!dp.flip));
-      lines.push("  sprite " + ((dimg && dimg.naturalWidth) || "?") + "x" + ((dimg && dimg.naturalHeight) || "?") + (dimg && dimg.complete ? "" : " (loading)"));
-      lines.push("  src " + ((dimg && dimg.src) ? dimg.src.split("/").pop() : "(none)"));
+      oLines.push("decor  index=" + di + (hiddenBy ? "  (hidden: " + hiddenBy + ")" : ""));
+      if (dp) oLines.push("  yOffset=" + dp.yOffset + " sc=" + dp.sc.toFixed(2) + " flip=" + (!!dp.flip));
+      oLines.push("  sprite " + ((dimg && dimg.naturalWidth) || "?") + "x" + ((dimg && dimg.naturalHeight) || "?") + (dimg && dimg.complete ? "" : " (loading)"));
+      oLines.push("  src " + ((dimg && dimg.src) ? dimg.src.split("/").pop() : "(none)"));
     } else {
-      lines.push("decor  none");
+      oLines.push("decor  none");
     }
     // Outline the inspected cell in cyan (no bob) so it is unambiguous.
     const hw = HALF_W * z, hh = HALF_H * z;
@@ -1020,26 +1054,25 @@ function drawDebugOverlay(z) {
   // Per-frame profiler readout (smoothed ms). 'frame' is the whole RAF callback;
   // sim = growth + building updates this frame; render = hover + world + entities +
   // overlay; world = floor draw + per-cell object probe (the zoom-out hot path).
-  lines.push("");
-  lines.push("PERF  fps " + PERF.fps.toFixed(0) + "   ms (avg)");
+  // GLOBAL box: profiler (smoothed ms), counts, caches, ambient, env, weather.
+  gLines.push("PERF  fps " + PERF.fps.toFixed(0) + "   ms (avg)");
   const phaseOrder = ["frame", "sim", "growth", "buildings", "anim", "render", "hover", "world", "entities", "overlay", "fx"];
   for (const name of phaseOrder) {
-    if (PERF.ms[name] !== undefined) lines.push("  " + name.padEnd(9) + PERF.ms[name].toFixed(2));
+    if (PERF.ms[name] !== undefined) gLines.push("  " + name.padEnd(9) + PERF.ms[name].toFixed(2));
   }
-  lines.push("cells " + (PERF.count.cells || 0) + "  entities " + (PERF.count.entities || 0) + "  shadows " + (G.useGL ? "GL" : (frameShadowSkip ? "OFF(dense)" : "on")) + (G.useGL ? "  inst " + glr.instanceCount() : ""));
-  lines.push("baseCache " + baseCacheSize() + "  mods " + modsSize(G.world.mods));
+  gLines.push("cells " + (PERF.count.cells || 0) + "  entities " + (PERF.count.entities || 0) + "  shadows " + (G.useGL ? "GL" : (frameShadowSkip ? "OFF(dense)" : "on")) + (G.useGL ? "  inst " + glr.instanceCount() : ""));
+  gLines.push("baseCache " + baseCacheSize() + "  mods " + modsSize(G.world.mods) + "  wet " + wetnessSize(G.world.wet));
   const ac = ambientCounts();
-  lines.push("ambient  clouds " + ac.clouds + " swarms " + ac.swarms + " bugs " + ac.bugs + " birds " + ac.birds + " beams " + ac.beams);
+  gLines.push("ambient  clouds " + ac.clouds + " swarms " + ac.swarms + " bugs " + ac.bugs + " birds " + ac.birds + " beams " + ac.beams);
   const tod = G.world.timeOfDay || 0, hh = Math.floor(tod * 24), mm = Math.floor((tod * 24 - hh) * 60);
   const phase = (tod < 0.21 || tod >= 0.79) ? "Night" : (tod < 0.31 ? "Dawn" : (tod < 0.69 ? "Day" : "Dusk"));
   const tn = envTint();
-  lines.push("env  day " + (G.world.day | 0 || 1) + "  " + (hh < 10 ? "0" + hh : hh) + ":" + (mm < 10 ? "0" + mm : mm) + " " + phase +
+  gLines.push("env  day " + (G.world.day | 0 || 1) + "  " + (hh < 10 ? "0" + hh : hh) + ":" + (mm < 10 ? "0" + mm : mm) + " " + phase +
     "  t=" + tod.toFixed(3) + "  shadow " + shadowMul().toFixed(2) + "  dim " + (tn ? Math.round(tn.a * 100) : 0) + "%");
-  lines.push("weather  " + weatherKind() + "  cloud " + Math.round(weatherCloud() * 100) + "%  rain " +
+  gLines.push("weather  " + weatherKind() + "  cloud " + Math.round(weatherCloud() * 100) + "%  rain " +
     Math.round(weatherRain() * 100) + "%  wdim " + Math.round(weatherDim() * 100) + "%");
-  // Text panel, top-left, fixed (screen). Start it BELOW the crafted-tools HUD
-  // (which also floats top-left and can wrap to multiple rows) so they never
-  // overlap. Coords are canvas-relative; the HUD/canvas rects convert for us.
+  // Boxes float top-left, BELOW the crafted-tools HUD (which also floats top-left and
+  // can wrap to multiple rows) so they never overlap. Coords are canvas-relative.
   const boxX = 8;
   let boxY = 8;
   if (craftedHud && craftedHud.childElementCount > 0) {
@@ -1047,20 +1080,22 @@ function drawDebugOverlay(z) {
     const cv = canvas.getBoundingClientRect();
     boxY = Math.max(8, hud.bottom - cv.top + 8);
   }
+  // Stack GLOBAL / TILE / OBJECT top-to-bottom; flow into a new column to the right
+  // when the next box would run past the bottom of the viewport.
+  const boxes = [["GLOBAL", gLines], ["TILE", tLines]];
+  if (oLines.length) boxes.push(["OBJECT", oLines]);
   ctx.save();
   ctx.font = "12px Consolas, monospace";
-  const pad = 8, lh = 15;
-  let maxw = 0;
-  for (const t of lines) maxw = Math.max(maxw, ctx.measureText(t).width);
-  const boxW = maxw + pad * 2, boxH = lines.length * lh + pad * 2;
-  ctx.fillStyle = "rgba(6, 10, 20, 0.82)";
-  ctx.fillRect(boxX, boxY, boxW, boxH);
-  ctx.strokeStyle = "rgba(0, 255, 255, 0.6)";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(boxX, boxY, boxW, boxH);
-  ctx.fillStyle = "#dce6ff";
   ctx.textBaseline = "top";
-  for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i], boxX + pad, boxY + pad + i * lh);
+  const gap = 8, maxBottom = (canvas.clientHeight || 600) - 8;
+  let bx = boxX, by = boxY, colW = 0;
+  for (const [title, ls] of boxes) {
+    const sz = debugBoxSize(title, ls);
+    if (by > boxY && by + sz.h > maxBottom) { bx += colW + gap; by = boxY; colW = 0; } // wrap to a new column
+    drawDebugBox(title, ls, bx, by, sz.w, sz.h);
+    by += sz.h + gap;
+    if (sz.w > colW) colW = sz.w;
+  }
   ctx.restore();
 }
 

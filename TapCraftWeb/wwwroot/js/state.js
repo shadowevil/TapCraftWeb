@@ -22,6 +22,7 @@ export const G = {
     wrapY: false,        // true = rows wrap (north-south). Globe is a TORUS: wrapX && wrapY (loops every direction)
     hydro: null,         // globe hydrology overlay (rivers/lakes), built at creation (cells.js); null otherwise
     mods: new Map(),     // nested Map<col, Map<row, { t?, st?, pr?, ch?, rk? }>> delta overlay (cells.js)
+    wet: new Map(),      // nested Map<col, Map<row, 0..1>> sparse ground-wetness overlay (wetness.js)
     landThreshold: 0,    // elevation cutoff for land/water (sampled at creation)
     spawn: { c: 0, r: 0 }, // initial camera-center land cell
     wood: 0,       // collected wood

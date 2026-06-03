@@ -7,6 +7,7 @@ import { G } from "./state.js";
 import { GD } from "./gamedata.js";
 import { newTools, resetTransients } from "./worldgen.js";
 import { initWorldGen, createMods, modsToEntries, modsFromEntries, modsSetCell } from "./cells.js";
+import { wetToEntries, wetFromEntries } from "./wetness.js";
 import { updateResourceUI } from "./ui.js";
 import { updateCraftedHud } from "./crafting.js";
 
@@ -172,12 +173,13 @@ function doSave() {
     // sparse map of modified cells (G.world.mods) is persisted, so even an infinite
     // world's save stays small (it grows only with what the player changes).
     localStorage.setItem(worldKey(G.world.id), JSON.stringify({
-      version: 12, id: G.world.id, name: G.world.name,
+      version: 13, id: G.world.id, name: G.world.name,
       infinite: G.world.infinite, cols: G.world.cols, rows: G.world.rows, seed: G.world.seed,
       settings: G.world.settings,
       landThreshold: G.world.landThreshold, spawn: G.world.spawn,
       cam: { x: G.cam.x, y: G.cam.y, zoom: G.cam.zoom },
       mods: modsToEntries(G.world.mods),
+      wet: wetToEntries(G.world.wet),
       wood: G.world.wood, stone: G.world.stone, iron: G.world.iron, gold: G.world.gold,
       iron_ingot: G.world.iron_ingot, gold_ingot: G.world.gold_ingot, gold_coin: G.world.gold_coin,
       tools: G.world.tools, craft: G.world.craft,
@@ -225,6 +227,8 @@ export function loadWorld(id) {
       G.world.mods = createMods();
       migrateLegacyArrays(d);
     }
+    // Ground wetness overlay (added v13); absent on older saves -> starts dry.
+    G.world.wet = wetFromEntries(d.wet);
     G.world.wood = d.wood | 0;
     G.world.stone = d.stone | 0;
     G.world.iron = d.iron | 0;

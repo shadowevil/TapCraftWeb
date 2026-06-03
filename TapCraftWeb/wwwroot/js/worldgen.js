@@ -9,6 +9,7 @@
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
 import { initWorldGen, createMods } from "./cells.js";
+import { createWet } from "./wetness.js";
 import { updateResourceUI } from "./ui.js";
 import { updateCraftedHud } from "./crafting.js";
 
@@ -41,6 +42,7 @@ export function generate(cols, rows, seed, settings) {
   G.world.settings = { ...settings };
   G.world.tick = 0;
   G.world.mods = createMods();
+  G.world.wet = createWet();
   G.world.wood = 0;
   G.world.stone = 0;
   G.world.iron = 0;

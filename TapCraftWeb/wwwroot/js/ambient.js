@@ -24,6 +24,7 @@ import { dayAmount, weatherCloud, weatherRain } from "./env.js";
 let clouds = [], birds = [], swarms = [], moonbeams = [], inited = false;
 let cloudField = []; // [{ccol,crow,r}] rebuilt each updateAmbient - fast cloud-coverage queries (rain)
 let windAng = 0, windTarget = 0, windTimer = 0; // shared cloud wind, EASED toward windTarget; re-rolled on a timer
+let cloudSizeMul = 1; // live per-frame radius scale: clouds swell toward storm-sized as the rain rises (clouds.rainSize)
 
 const OFFSCREEN_M = 120;       // despawn margin (screen px) beyond the viewport
 const DEFAULT_WIND_SWITCH = 300000; // 5 min between wind-direction changes
@@ -118,7 +119,10 @@ function newCloud(inView) {
   }
   return c;
 }
-function cloudMargin(c) { return c.rCells * 2 * HALF_W * G.cam.zoom + 24; }
+// Effective draw radius (cells): the cloud's own size swollen by the live storm scale, so the
+// shape, the rain-coverage field, and the recycle margin all agree on how big the cloud is now.
+function cloudR(c) { return c.rCells * cloudSizeMul; }
+function cloudMargin(c) { return cloudR(c) * 2 * HALF_W * G.cam.zoom + 24; }
 function recycleCloud(c) {
   const m = cloudMargin(c), w = frameW || W(), h = frameH || H();
   let sx, sy;
@@ -148,7 +152,8 @@ export function cloudShadowAt(wx, wy) {
 function rebuildCloudField() {
   cloudField.length = 0;
   for (const c of clouds) {
-    cloudField.push({ ccol: c.wx / (2 * HALF_W) + c.wy / (2 * HALF_H), crow: c.wy / (2 * HALF_H) - c.wx / (2 * HALF_W), r: c.rCells, r2: c.rCells * c.rCells });
+    const r = cloudR(c);
+    cloudField.push({ ccol: c.wx / (2 * HALF_W) + c.wy / (2 * HALF_H), crow: c.wy / (2 * HALF_H) - c.wx / (2 * HALF_W), r, r2: r * r });
   }
 }
 
@@ -293,9 +298,17 @@ export function updateAmbient(dtMs) {
   const maxTurn = ((cw.windTurnSpeed || 6) * Math.PI) / 180 * dt; // radians this frame
   const diff = Math.atan2(Math.sin(windTarget - windAng), Math.cos(windTarget - windAng));
   windAng += Math.max(-maxTurn, Math.min(maxTurn, diff));
-  // Cloud coverage tracks the weather: ease the active cloud count toward
-  // base-count x cloud-cover (add fresh ones off-screen; drop off-screen ones first).
-  const coverTarget = Math.round(cloudBudget() * weatherCloud());
+  // Clouds swell as the rain rises (real storm clouds are miles wide). One shared scale drives
+  // every cloud's draw size, its rain-coverage footprint, and its recycle margin (via cloudR).
+  cloudSizeMul = 1 + weatherRain() * (cw.rainSize || 0);
+  // Cloud coverage tracks the weather: ease the active cloud count toward budget x coverage,
+  // where coverage = cloud cover PLUS a share of the rain (rainCover) - so rain and storms push
+  // the sky toward fully overcast, not just the plain cloudy level. Each cloud's drawn AREA grows
+  // with the square of cloudSizeMul, so we divide the COUNT by cloudSizeMul: storm clouds are far
+  // bigger but proportionally fewer, which keeps the sky overcast WITHOUT a runaway tile-draw cost
+  // (cost ~ count x radius^2). Add fresh ones off-screen; drop off-screen ones first.
+  const cover = Math.min(1, weatherCloud() + weatherRain() * (cw.rainCover || 0));
+  const coverTarget = Math.round((cloudBudget() * cover) / cloudSizeMul);
   while (clouds.length < coverTarget) clouds.push(newCloud(false));
   while (clouds.length > coverTarget) {
     let idx = clouds.findIndex((c) => offscreen(c.wx, c.wy, cloudMargin(c)));
@@ -418,6 +431,15 @@ function renderMoonlight() {
 // Cloud shadow = darkened floor TILES (iso diamonds) in a lumpy, banded blob, so
 // it mimics the tile grid instead of a smooth circle. Alpha steps in 3 bands
 // (denser center) for a pixel/tile look; the outline is perturbed per cloud.
+//
+// Hot path - this is the heavy-coverage perf sink (clouds x R^2 tiles per frame). It is
+// kept cheap by: (1) precomputing the lumpy-outline radius once per cloud into a small
+// angle table (CLOUD_LUMP) so the per-tile cost is a lookup, not atan2 + two sins; (2)
+// inlining the cell->screen transform (no cellCenter/worldToScreen object allocations per
+// tile); (3) rejecting far corner tiles by SQUARED distance, so sqrt/atan2 run only inside
+// the blob. Look is unchanged bar a tiny angular quantization of the outline.
+const CLOUD_N = 128;                          // angular resolution of the lumpy-outline table (pow2)
+const CLOUD_LUMP = new Float32Array(CLOUD_N); // reused each drawCloud call (no per-call alloc)
 function drawCloud(c, z) {
   // Anchor the shape to the cloud's CONTINUOUS (fractional) cell position so it
   // glides smoothly instead of snapping tile-by-tile - each grid-aligned tile's
@@ -425,25 +447,31 @@ function drawCloud(c, z) {
   const fcol = c.wx / (2 * HALF_W) + c.wy / (2 * HALF_H);
   const frow = c.wy / (2 * HALF_H) - c.wx / (2 * HALF_W);
   const ccol = Math.round(fcol), crow = Math.round(frow);
-  const R = c.rCells, hw = HALF_W * z, hh = HALF_H * z, RR = Math.ceil(R) + 1;
-  // Batch the diamonds into 3 alpha-band paths and fill each ONCE. (It used to do a
-  // separate beginPath+fill per tile - hundreds of canvas fills per cloud, which is
-  // the rain/heavy-coverage perf sink.) Same look: each band is one translucent layer.
+  const R = cloudR(c), hw = HALF_W * z, hh = HALF_H * z, RR = Math.ceil(R) + 1;
+  const camX = G.cam.x, camY = G.cam.y, PI = Math.PI, PI2 = PI * 2;
+  const maxR = R * 1.15, maxR2 = maxR * maxR;   // 1.15 = just past the max lumpy radius (0.78+0.22+0.14)
+  // Lumpy outline radius-multiplier vs angle, computed ONCE per cloud (was per tile).
+  for (let i = 0; i < CLOUD_N; i++) {
+    const a = (i / CLOUD_N) * PI2 - PI;
+    CLOUD_LUMP[i] = 0.78 + 0.22 * Math.sin(2 * a + c.phase) + 0.14 * Math.sin(3 * a + c.phase2);
+  }
+  const idxScale = CLOUD_N / PI2;
+  // Batch the diamonds into 3 alpha-band paths and fill each ONCE (one translucent layer each).
   const bands = [new Path2D(), new Path2D(), new Path2D()];
   for (let dr = -RR; dr <= RR; dr++) {
     for (let dc = -RR; dc <= RR; dc++) {
       const col = ccol + dc, row = crow + dr;
       const ox = col - fcol, oy = row - frow;        // continuous offset (cell space)
-      const d = Math.hypot(ox, oy);
-      if (d > R * 1.15) continue;                    // beyond the max lumpy radius -> skip the trig
-      const ang = Math.atan2(oy, ox);
-      const reff = R * (0.78 + 0.22 * Math.sin(2 * ang + c.phase) + 0.14 * Math.sin(3 * ang + c.phase2));
+      const d2 = ox * ox + oy * oy;
+      if (d2 > maxR2) continue;                      // far corner -> skip before any sqrt/atan2
+      const reff = R * CLOUD_LUMP[((Math.atan2(oy, ox) + PI) * idxScale) & (CLOUD_N - 1)];
+      const d = Math.sqrt(d2);
       if (d > reff) continue;
       const lvl = Math.ceil((1 - d / reff) * 3);     // 3 alpha bands (tiled falloff)
       if (lvl <= 0) continue;
-      const cc = cellCenter(col, row), s = worldToScreen(cc.x, cc.y);
+      const sx = (col - row) * hw + camX, sy = (col + row) * hh + camY; // inlined cell->screen (no alloc)
       const p = bands[Math.min(3, lvl) - 1];
-      p.moveTo(s.x, s.y - hh); p.lineTo(s.x + hw, s.y); p.lineTo(s.x, s.y + hh); p.lineTo(s.x - hw, s.y); p.closePath();
+      p.moveTo(sx, sy - hh); p.lineTo(sx + hw, sy); p.lineTo(sx, sy + hh); p.lineTo(sx - hw, sy); p.closePath();
     }
   }
   const rainBoost = 1 + weatherRain() * 0.7; // storm clouds read darker when it rains

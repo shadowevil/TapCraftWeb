@@ -11,6 +11,7 @@ import { consoleOverlay, consoleLogEl, consoleInput } from "./dom.js";
 import { updateResourceUI } from "./ui.js";
 import { addTool } from "./resources.js";
 import { setWeather, weatherKinds } from "./env.js";
+import { wetStatus } from "./wetness.js";
 import { glReady } from "./gl/glrender.js";
 
 const MAX_LOG = 200; // keep memory bounded; CSS limits visible lines to ~10
@@ -90,6 +91,14 @@ register("setweather", "setweather <clear|cloudy|rain|storm>", (args) => {
   const k = (args[0] || "").toLowerCase();
   if (!setWeather(k)) return { text: "Unknown weather '" + (args[0] || "") + "'. Valid: " + weatherKinds().join(", "), error: true };
   return "Weather set to " + k + " (eases in over a few seconds).";
+});
+
+// Inspect the ground-wetness state (data-only layer): count of tracked wet tiles
+// and the wetness at the current view-center cell.
+register("wet", "wet", () => {
+  if (!G.hasWorld) return { text: "No active world.", error: true };
+  const s = wetStatus();
+  return "Ground wetness: " + s.count + " wet tiles. Center (" + s.c + "," + s.r + ") = " + Math.round(s.centerWet * 100) + "%.";
 });
 
 register("help", "help", () => {

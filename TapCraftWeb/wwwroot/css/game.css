@@ -144,17 +144,146 @@ body.tc-menu-mode #tc-gl {
 }
 
 /* Playback controls float just below the top bar (in-game only). */
-.tc-playback {
+/* Right-side HUD stack (in-game only): forecast+minimap panel, then playback below it. */
+.tc-hud-right {
   position: fixed;
   top: calc(var(--tc-topbar-h) + var(--tc-subbar-h) + 10px);
   right: 12px;
   z-index: 5;
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   gap: 8px;
+  pointer-events: none; /* HUD area passes clicks through; interactive children opt back in */
 }
 
-body.tc-menu-mode .tc-playback {
+body.tc-menu-mode .tc-hud-right {
   display: none;
+}
+
+.tc-playback {
+  display: flex;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+/* Forecast + minimap: one combined panel (minimap on top, conditions below). */
+.tc-forecast {
+  width: 225px;
+  color: var(--tc-fg);
+  background: rgba(20, 29, 49, 0.82);
+  border: 1px solid var(--tc-border);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow: hidden;        /* clip the minimap canvas to the rounded corners */
+  pointer-events: none;
+  user-select: none;
+}
+
+.tc-minimap-wrap {
+  position: relative;
+  line-height: 0;          /* drop the inline-canvas baseline gap */
+}
+
+.tc-minimap {
+  display: block;
+  width: 100%;
+  height: 150px;
+  background: #0a1222;
+  pointer-events: auto; /* capture wheel-zoom */
+  cursor: crosshair;
+}
+
+/* Hovered-tile coordinate readout, bottom-left of the minimap. */
+.tc-mm-coords {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 1px 6px;
+  font: 600 11px/1.5 "Consolas", monospace;
+  color: var(--tc-fg);
+  background: rgba(10, 16, 30, 0.72);
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.tc-mm-zoom {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  display: flex;
+  gap: 3px;
+  pointer-events: none;
+}
+
+.tc-mm-btn {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  font: 600 13px/1 "Consolas", monospace;
+  color: var(--tc-fg);
+  background: rgba(10, 16, 30, 0.82);
+  border: 1px solid var(--tc-border);
+  border-radius: 4px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.tc-mm-btn:hover {
+  background: rgba(79, 140, 255, 0.25);
+}
+
+.tc-fc-info {
+  padding: 7px 9px;
+}
+
+.tc-fc-cond {
+  font-weight: 600;
+  font-size: 13px;
+  text-align: center;
+  margin-bottom: 5px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--tc-border);
+}
+
+.tc-fc-grid {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px 10px;
+}
+
+.tc-fc-k {
+  color: var(--tc-muted);
+}
+
+.tc-fc-v {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Loading overlay (world generation + minimap pre-render). */
+.tc-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: rgba(6, 10, 20, 0.86);
+  color: var(--tc-fg);
+  font-size: 16px;
+}
+
+.tc-loading.hidden {
+  display: none;
+}
+
+.tc-loading-box {
+  padding: 16px 24px;
+  background: rgba(20, 29, 49, 0.92);
+  border: 1px solid var(--tc-border);
+  border-radius: 10px;
 }
 
 .tc-icon-btn {

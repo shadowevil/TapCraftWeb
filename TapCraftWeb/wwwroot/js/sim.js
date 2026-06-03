@@ -10,7 +10,7 @@ import {
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
 import { playBtn, pauseBtn } from "./dom.js";
-import { visibleCellBounds } from "./iso.js";
+import { viewCenterCell } from "./iso.js";
 import { setStage, setProgress, setChop, clampBox, growCell } from "./cells.js";
 import { PERF, pBegin, pEnd, pFps } from "./perf.js";
 import { updateAmbient } from "./ambient.js";
@@ -23,6 +23,7 @@ import {
 } from "./resources.js";
 import { advanceCrafting } from "./crafting.js";
 import { updateBuildings } from "./buildings.js";
+import { updateWetness } from "./wetness.js";
 import { saveWorld } from "./persistence.js";
 import { setWorldAudioPaused } from "./sound.js";
 
@@ -34,6 +35,9 @@ export function tick() {
   // Buildings harvest on the fixed sim step too, so they pause with the game
   // and stay deterministic. They run for ALL buildings regardless of viewport.
   const b0 = pBegin(); updateBuildings(TICK_MS); pEnd("buildings", b0);
+  // Ground wetness: rain wets the visible ground, evaporation dries every tracked
+  // tile. Pauses with the game (runs in the fixed tick). Data layer only for now.
+  const w0 = pBegin(); updateWetness(TICK_MS); pEnd("wetness", w0);
 }
 
 // Growth runs on a PRIORITY RADIUS, not the whole world (an infinite / 10000x10000
@@ -61,8 +65,7 @@ function growthTick() {
   // past the last band growth is frozen. Bounded by the bands' radii, NOT by zoom -
   // so this stays cheap even at max zoom-out over a huge/infinite world. (Chebyshev
   // distance partitions the bands into disjoint rings; no per-cell allocation.)
-  const vb = visibleCellBounds();
-  const cc = Math.round((vb.c0 + vb.c1) / 2), cr = Math.round((vb.r0 + vb.r1) / 2);
+  const { c: cc, r: cr } = viewCenterCell();
   let innerR = -1;
   for (const band of bands) {
     const R = band.radius | 0;
