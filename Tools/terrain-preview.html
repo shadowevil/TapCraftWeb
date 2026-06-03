@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<!--
+  TapCraft terrain preview (dev tool, NOT shipped). Open directly in a browser
+  (file://) - no server needed. Top-down view of the INFINITE elevation field so we
+  can compare continent-shaping options before changing the game's cells.js.
+
+  The noise (value-noise fBm) is copied from the game's rng.js so the preview matches
+  the engine. Modes:
+    A "current"            - the live game recipe: 6-octave warped base + a weak
+                             low-frequency continent term added on top -> archipelagos.
+    B "continental-blend"  - a low-frequency continent field is the DOMINANT shape;
+                             fractal detail is added with reduced weight; then a
+                             redistribution S-curve sharpens land/ocean -> big landmasses.
+    C "continentalness"    - Minecraft-1.18 style: a low-freq continentalness value mapped
+                             through a spline (deep ocean -> steep coast -> inland plateau)
+                             + erosion detail.
+    D "worley-plates"      - tectonic plates: Worley/Voronoi cells, each land or ocean,
+                             with blended coastlines at plate boundaries.
+  Drag to pan. Everything re-renders on change.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>TapCraft - terrain preview</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0c1018; color: #cdd6e6; font: 13px/1.45 Consolas, monospace; }
+  .wrap { display: flex; gap: 16px; padding: 16px; align-items: flex-start; flex-wrap: wrap; }
+  canvas { image-rendering: pixelated; border: 1px solid #2a3550; background: #000; cursor: grab; }
+  canvas.drag { cursor: grabbing; }
+  .panel { width: 320px; }
+  h1 { font-size: 15px; margin: 0 0 4px; color: #8fb4ff; }
+  .sub { color: #7f8aa3; margin: 0 0 12px; }
+  .row { margin: 7px 0; display: grid; grid-template-columns: 120px 1fr 44px; gap: 8px; align-items: center; }
+  .row label { color: #9fb0d0; }
+  .row .val { text-align: right; color: #cfe; }
+  input[type=range] { width: 100%; }
+  select, input[type=number] { background: #161c2a; color: #cdd6e6; border: 1px solid #2a3550; padding: 3px 6px; font: inherit; }
+  .stat { margin-top: 10px; padding: 8px 10px; background: #11161f; border: 1px solid #2a3550; border-radius: 4px; }
+  .stat b { color: #8fdc9f; }
+  .note { color: #7f8aa3; margin-top: 10px; }
+  .legend { display: flex; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .sw { width: 12px; height: 12px; display: inline-block; border: 1px solid #00000055; }
+  button { background: #21304e; color: #cdd6e6; border: 1px solid #3a4f7a; padding: 5px 10px; font: inherit; cursor: pointer; border-radius: 4px; }
+  button:hover { background: #2a3c5e; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <canvas id="cv" width="640" height="640"></canvas>
+  <div class="panel">
+    <h1>Terrain preview</h1>
+    <p class="sub">Compare continent-shaping options. Drag the map to pan.</p>
+
+    <div class="row">
+      <label for="mode">Mode</label>
+      <select id="mode">
+        <option value="current">A - current (game)</option>
+        <option value="blend" selected>B - continental blend</option>
+        <option value="cont">C - continentalness curve</option>
+        <option value="worley">D - worley plates</option>
+      </select>
+      <span></span>
+    </div>
+    <div class="row">
+      <label for="seed">Seed</label>
+      <input id="seed" type="number" value="12345" />
+      <button id="rnd">rnd</button>
+    </div>
+    <div class="row"><label>View (cells)</label><input id="view" type="range" min="300" max="4000" step="50" value="1400" /><span class="val" id="viewV"></span></div>
+    <div class="row"><label>Land %</label><input id="land" type="range" min="10" max="90" step="1" value="45" /><span class="val" id="landV"></span></div>
+    <div class="row"><label>Continent scale</label><input id="cscale" type="range" min="2" max="30" step="0.5" value="7" /><span class="val" id="cscaleV"></span></div>
+    <div class="row"><label>Detail weight</label><input id="detail" type="range" min="0" max="100" step="1" value="30" /><span class="val" id="detailV"></span></div>
+    <div class="row"><label>Sharpen (redist)</label><input id="sharp" type="range" min="100" max="500" step="10" value="280" /><span class="val" id="sharpV"></span></div>
+    <div class="row"><label>Warp amount</label><input id="warp" type="range" min="0" max="60" step="1" value="22" /><span class="val" id="warpV"></span></div>
+    <div class="row"><label>Coast steepness</label><input id="coast" type="range" min="2" max="20" step="0.5" value="8" /><span class="val" id="coastV"></span></div>
+
+    <div class="stat">
+      land area: <b id="landStat">-</b> &nbsp; | &nbsp; render: <b id="msStat">-</b>
+      <div class="legend">
+        <span><i class="sw" style="background:#173a63"></i>deep</span>
+        <span><i class="sw" style="background:#3f7fb0"></i>sea</span>
+        <span><i class="sw" style="background:#d8c489"></i>beach</span>
+        <span><i class="sw" style="background:#4f9a4a"></i>grass</span>
+        <span><i class="sw" style="background:#3a6e33"></i>forest</span>
+        <span><i class="sw" style="background:#6b5a45"></i>hill</span>
+        <span><i class="sw" style="background:#e8edf2"></i>peak</span>
+      </div>
+    </div>
+    <p class="note" id="hint"></p>
+  </div>
+</div>
+
+<script>
+"use strict";
+// ---- value noise (copied from the game's rng.js so the preview matches) -------
+function hash01(x, y, seed) {
+  let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(seed | 0, 362437);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967295;
+}
+function makeFbm(seed, octaves) {
+  const smooth = (t) => t * t * (3 - 2 * t);
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const value = (x, y) => {
+    const xi = Math.floor(x), yi = Math.floor(y);
+    const xf = x - xi, yf = y - yi;
+    const u = smooth(xf), v = smooth(yf);
+    return lerp(lerp(hash01(xi, yi, seed), hash01(xi + 1, yi, seed), u),
+                lerp(hash01(xi, yi + 1, seed), hash01(xi + 1, yi + 1, seed), u), v);
+  };
+  return (x, y) => {
+    let amp = 0.5, freq = 1, sum = 0, norm = 0;
+    for (let o = 0; o < octaves; o++) { sum += amp * value(x * freq, y * freq); norm += amp; amp *= 0.5; freq *= 2; }
+    return sum / norm;
+  };
+}
+// Worley/cellular: nearest two jittered grid points -> distances + plate ids.
+function makeWorley(seed) {
+  return (x, y) => {
+    const gx = Math.floor(x), gy = Math.floor(y);
+    let f1 = 1e9, f2 = 1e9, id1 = 0, id2 = 0;
+    for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+      const cx = gx + ox, cy = gy + oy;
+      const jx = cx + hash01(cx, cy, seed), jy = cy + hash01(cx, cy, (seed ^ 0x9e3779b9) >>> 0);
+      const dx = x - jx, dy = y - jy, d = Math.sqrt(dx * dx + dy * dy);
+      const id = (Math.imul(cx, 73856093) ^ Math.imul(cy, 19349663)) >>> 0;
+      if (d < f1) { f2 = f1; id2 = id1; f1 = d; id1 = id; }
+      else if (d < f2) { f2 = d; id2 = id; }
+    }
+    return { f1, f2, id1, id2 };
+  };
+}
+
+// ---- engine constants (from cells.js) -----------------------------------------
+const WARP_SCALE = 0.08, BASE_SCALE = 0.045, CONTRAST = 1.5;
+let N = {}; // noise closures, rebuilt on seed change
+function buildNoise(seed) {
+  N = {
+    base: makeFbm(seed >>> 0, 6),
+    warpX: makeFbm((seed ^ 0x9e3779b9) >>> 0, 4),
+    warpY: makeFbm((seed ^ 0x85ebca6b) >>> 0, 4),
+    cont: makeFbm((seed ^ 0xc0ffee01) >>> 0, 2),
+    cont3: makeFbm((seed ^ 0xc0ffee01) >>> 0, 3),
+    ero: makeFbm((seed ^ 0x1b56c4e9) >>> 0, 4),
+    worley: makeWorley((seed ^ 0x51ed2701) >>> 0),
+    plateSeed: (seed ^ 0x2c1b3a9f) >>> 0,
+  };
+}
+const clamp01 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+const smoothstep = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+const lerp = (a, b, t) => a + (b - a) * t;
+// redistribution S-curve: push values away from 0.5 (sharper land/ocean, narrower coast)
+function sCurve(e, p) { return e <= 0.5 ? 0.5 * Math.pow(e * 2, p) : 1 - 0.5 * Math.pow((1 - e) * 2, p); }
+
+// ---- elevation per mode (x,y = world cell coords) -----------------------------
+function elevAt(mode, x, y, P) {
+  const wx = x + (N.warpX(x * WARP_SCALE, y * WARP_SCALE) * 2 - 1) * P.warp;
+  const wy = y + (N.warpY(x * WARP_SCALE, y * WARP_SCALE) * 2 - 1) * P.warp;
+  const cs = P.cscale; // continent scale (x1000)
+  if (mode === "current") {
+    let e = N.base(wx * BASE_SCALE, wy * BASE_SCALE);
+    e = (e - 0.5) * CONTRAST + 0.5;
+    e += (N.cont(wx * 0.011, wy * 0.011) * 2 - 1) * 0.16; // the game's weak continent term
+    return e;
+  }
+  if (mode === "blend") {
+    const cont = N.cont(wx * cs, wy * cs);                 // low-freq landmass shape (dominant)
+    const detail = N.base(wx * BASE_SCALE, wy * BASE_SCALE); // fractal coastline detail
+    let e = cont * (1 - P.detail) + detail * P.detail;
+    return sCurve(clamp01(e), P.sharp);                   // sharpen toward land/ocean
+  }
+  if (mode === "cont") {
+    const c = N.cont3(wx * cs, wy * cs);                  // continentalness 0..1
+    // spline: deep ocean (flat low) -> steep coast -> inland plateau. Coast steepness = P.coast.
+    let base;
+    const mid = 0.5, half = 0.5 / P.coast;                // narrower half = steeper coast
+    if (c < mid - half) base = 0.12 + (c / (mid - half)) * 0.16;          // 0.12..0.28 ocean
+    else if (c < mid + half) base = lerp(0.28, 0.62, (c - (mid - half)) / (2 * half)); // steep coast
+    else base = 0.62 + ((c - (mid + half)) / (1 - mid - half)) * 0.22;    // 0.62..0.84 inland
+    const erosion = (N.ero(wx * 0.05, wy * 0.05) * 2 - 1) * 0.10 * P.detail * 2; // roughness
+    return base + erosion;
+  }
+  // worley plates
+  const w = N.worley(wx * cs, wy * cs);
+  const land1 = hash01(w.id1 & 0xffff, w.id1 >>> 16, N.plateSeed);
+  const land2 = hash01(w.id2 & 0xffff, w.id2 >>> 16, N.plateSeed);
+  const e1 = land1 < P.landFrac ? 0.72 : 0.24;
+  const e2 = land2 < P.landFrac ? 0.72 : 0.24;
+  const t = smoothstep(0, 0.18, w.f2 - w.f1);             // 1 deep in a plate, 0 at a boundary
+  let e = lerp((e1 + e2) * 0.5, e1, t);                   // blend toward the boundary
+  e += (N.base(wx * BASE_SCALE, wy * BASE_SCALE) - 0.5) * 0.28 * P.detail * 2; // coast detail
+  return e;
+}
+
+// ---- render -------------------------------------------------------------------
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+const RES = 320; // internal render resolution (scaled up to the 640 canvas)
+const off = document.createElement("canvas"); off.width = RES; off.height = RES;
+const offctx = off.getContext("2d");
+const img = offctx.createImageData(RES, RES);
+let panX = 0, panY = 0;
+
+function colorFor(e, thr, out, o) {
+  let r, g, b;
+  if (e < thr) {                       // ocean: deep -> shallow
+    const d = clamp01((thr - e) / 0.35);
+    r = lerp(63, 23, d); g = lerp(127, 58, d); b = lerp(176, 99, d);
+  } else {                              // land: beach -> grass -> forest -> hill -> peak
+    const h = clamp01((e - thr) / 0.45);
+    if (h < 0.06) { r = 216; g = 196; b = 137; }                       // beach
+    else if (h < 0.40) { const t = (h - 0.06) / 0.34; r = lerp(79, 58, t); g = lerp(154, 110, t); b = lerp(74, 51, t); } // grass->forest
+    else if (h < 0.75) { const t = (h - 0.40) / 0.35; r = lerp(58, 107, t); g = lerp(110, 90, t); b = lerp(51, 69, t); }  // forest->hill
+    else { const t = (h - 0.75) / 0.25; r = lerp(107, 232, t); g = lerp(90, 237, t); b = lerp(69, 242, t); }              // hill->peak
+  }
+  out[o] = r; out[o + 1] = g; out[o + 2] = b; out[o + 3] = 255;
+}
+
+function render() {
+  const t0 = performance.now();
+  const mode = el("mode").value;
+  const view = +el("view").value;            // cells across the view
+  const cellsPerPx = view / RES;
+  const landTarget = +el("land").value / 100;
+  const P = {
+    cscale: +el("cscale").value / 1000,
+    detail: +el("detail").value / 100,
+    sharp: +el("sharp").value / 100,
+    warp: +el("warp").value,
+    coast: +el("coast").value,
+    landFrac: 0.5,                            // worley: fraction of plates that are land (tuned via land% below)
+  };
+  // worley land fraction tracks the land% slider loosely
+  P.landFrac = clamp01(landTarget + 0.1);
+
+  // 1) elevation grid
+  const elev = new Float32Array(RES * RES);
+  for (let py = 0; py < RES; py++) {
+    const wy = panY + py * cellsPerPx;
+    for (let px = 0; px < RES; px++) {
+      const wx = panX + px * cellsPerPx;
+      elev[py * RES + px] = elevAt(mode, wx, wy, P);
+    }
+  }
+  // 2) sea-level threshold from the histogram (hit the target land %)
+  const sample = [];
+  for (let i = 0; i < elev.length; i += 7) sample.push(elev[i]);
+  sample.sort((a, b) => a - b);
+  const thr = sample[Math.min(sample.length - 1, Math.max(0, Math.floor((1 - landTarget) * sample.length)))];
+  // 3) colorize + measure land
+  let landCount = 0;
+  for (let i = 0; i < elev.length; i++) { if (elev[i] >= thr) landCount++; colorFor(elev[i], thr, img.data, i * 4); }
+  offctx.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(off, 0, 0, cv.width, cv.height);
+
+  el("landStat").textContent = (100 * landCount / elev.length).toFixed(1) + "%";
+  el("msStat").textContent = (performance.now() - t0).toFixed(0) + " ms";
+}
+
+// ---- controls -----------------------------------------------------------------
+function el(id) { return document.getElementById(id); }
+const vals = { view: (v) => v + " cells", land: (v) => v + "%", cscale: (v) => (v / 1000).toFixed(4), detail: (v) => v + "%", sharp: (v) => (v / 100).toFixed(1) + "x", warp: (v) => v, coast: (v) => v };
+function syncLabels() { for (const k of Object.keys(vals)) { const e = el(k + "V"); if (e) e.textContent = vals[k](el(k).value); } }
+let raf = 0;
+function schedule() { syncLabels(); updateHint(); if (!raf) raf = requestAnimationFrame(() => { raf = 0; render(); }); }
+for (const id of ["mode", "view", "land", "cscale", "detail", "sharp", "warp", "coast"]) el(id).addEventListener("input", schedule);
+el("seed").addEventListener("input", () => { buildNoise(+el("seed").value | 0); schedule(); });
+el("rnd").addEventListener("click", () => { el("seed").value = (Math.random() * 1e9) | 0; buildNoise(+el("seed").value | 0); schedule(); });
+
+// drag to pan
+let drag = null;
+cv.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, y: e.clientY, px: panX, py: panY }; cv.classList.add("drag"); cv.setPointerCapture(e.pointerId); });
+cv.addEventListener("pointermove", (e) => { if (!drag) return; const cpp = (+el("view").value) / RES; const k = (RES / cv.width) * cpp; panX = drag.px - (e.clientX - drag.x) * k; panY = drag.py - (e.clientY - drag.y) * k; schedule(); });
+cv.addEventListener("pointerup", (e) => { drag = null; cv.classList.remove("drag"); });
+
+const HINTS = {
+  current: "The live game: a strong 6-octave fractal base with a WEAK continent term added on top. Near sea level the fractal coast fragments into islands + lakes. This is what you have now.",
+  blend: "Continent field is the DOMINANT shape; fractal detail is mixed in at 'Detail weight'; 'Sharpen' pushes elevations to clear land/ocean (fewer islands/lakes). Lower 'Continent scale' = bigger continents. Recommended starting point.",
+  cont: "Minecraft-1.18 style: low-freq 'continentalness' mapped through a spline (ocean -> steep coast -> inland plateau). 'Coast steepness' controls how abrupt the shoreline is; 'Detail weight' adds erosion roughness.",
+  worley: "Tectonic plates: space is split into Voronoi cells, each randomly land or ocean, blended at boundaries. Very coherent continents with long coastlines; 'Continent scale' sets plate size.",
+};
+function updateHint() { el("hint").textContent = HINTS[el("mode").value] || ""; }
+
+buildNoise(+el("seed").value | 0);
+syncLabels(); updateHint(); render();
+</script>
+</body>
+</html>

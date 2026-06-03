@@ -468,6 +468,83 @@ body.tc-menu-mode .tc-playback {
   flex-shrink: 0;
 }
 
+/* New World: wide tabbed layout -------------------------------------- */
+/* A wider card whose TAB BODY scrolls, so the tab strip + actions stay
+   pinned while the settings list scrolls. Overrides the base .tc-card. */
+.tc-card-wide {
+  width: min(760px, 94vw);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.tc-card-wide h1 { margin-bottom: 10px; }
+.tc-newworld-top { margin-bottom: 12px; }
+
+.tc-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--tc-border);
+}
+.tc-tab {
+  padding: 8px 13px;
+  font-size: 13px;
+  color: var(--tc-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.tc-tab:hover { color: var(--tc-fg); background: rgba(255, 255, 255, 0.04); }
+.tc-tab-active { color: var(--tc-fg); border-bottom-color: var(--tc-accent); }
+.tc-tab:focus-visible { outline: 2px solid var(--tc-accent); outline-offset: -2px; }
+
+.tc-tabbody {
+  flex: 1 1 auto;
+  min-height: 0;            /* let the flex child actually scroll */
+  overflow-y: auto;
+  padding-right: 6px;       /* breathing room beside the scrollbar */
+}
+.tc-tabpanel { display: none; }
+.tc-tabpanel-active { display: block; }
+
+/* Two-column grid of settings; wide items + sub-heads span both columns. */
+.tc-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 22px;
+  align-content: start;
+}
+.tc-grid .tc-row { margin-bottom: 10px; }
+.tc-row-wide { grid-column: 1 / -1; }
+.tc-fieldhead {
+  grid-column: 1 / -1;
+  margin: 8px 0 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--tc-muted);
+}
+.tc-desc {
+  margin: 3px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--tc-muted);
+}
+.tc-card-wide .tc-actions {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--tc-border);
+}
+
+/* Collapse to a single column on narrow screens. */
+@media (max-width: 560px) {
+  .tc-grid { grid-template-columns: 1fr; }
+}
+
 /* Crafting opener (bottom-left corner) ------------------------------- */
 .tc-craft-open {
   position: fixed;

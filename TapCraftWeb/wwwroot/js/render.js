@@ -3,7 +3,7 @@
 "use strict";
 
 import {
-  SPRITE, HALF_W, HALF_H, OBJECT_LIFT,
+  SPRITE, HALF_W, HALF_H, DEFAULT_Y_OFFSET,
   SHADOW_ALPHA, SHADOW_SKEW, SHADOW_SQUASH,
   SHADOW_POOL_ALPHA, SHADOW_POOL_RATIO, DROP_SCALE, SHADOW_MIN_ZOOM, WATER_ANIM_MIN_ZOOM, DECOR_MIN_ZOOM, SHADOW_SKIP_COUNT,
 } from "./config.js";
@@ -20,7 +20,7 @@ import {
 import { popFactor, dropImage, dropScreen } from "./resources.js";
 import { canPlaceFootprint, canAffordBuilding, buildingTargets, cellsInRange, hutToolKind, hutToolCount } from "./buildings.js";
 import { mineableAt, mineableSprite } from "./mineable.js";
-import { tileAt, stageAt, progressAt, chopAt, rockRawAt, baseCacheSize, decorAt, shoreDist, biomeAt, moistureAt, landHeightAt, uplandAt } from "./cells.js";
+import { tileAt, stageAt, progressAt, chopAt, rockRawAt, baseCacheSize, decorAt, shoreDist, biomeAt, moistureAt, landHeightAt, uplandAt, wrapCol, wrapRow, hydroClassAt, iceAt, temperatureAt, snownessAt, desertAt } from "./cells.js";
 import * as glr from "./gl/glrender.js";
 import { uvFor } from "./gl/atlas.js";
 import { PERF, pBegin, pEnd, pCount } from "./perf.js";
@@ -29,18 +29,33 @@ import { envTint, shadowMul, weatherDim, weatherCloud, weatherRain, weatherKind 
 import { renderRain, renderLightning, activeSplashes, drawSplash } from "./weather.js";
 import { positionBuildingPanel, updateBuildHint, updateDayCounter, updateBuildPanel } from "./ui.js";
 
+// Globe: buildings (and their rings/panel) are drawn from a LIST at their canonical
+// column, but the floor/objects wrap seamlessly by drawing the raw column. So shift a
+// building's column to the wrapped copy nearest a reference column (the view center or
+// the cursor) before drawing, so it appears in every wrapped view. Identity otherwise.
+export function wrapColTo(col, refCol) {
+  if (!G.world.wrapX) return col;
+  const n = G.world.cols;
+  return col + Math.round((refCol - col) / n) * n;
+}
+export function wrapRowTo(row, refRow) {
+  if (!G.world.wrapY) return row;
+  const n = G.world.rows;
+  return row + Math.round((refRow - row) / n) * n;
+}
+
 // Sprite + placement for a plant cell (shared by render and hit-testing so
 // they always agree on size/lift/flip).
 export function plantDrawParams(stage, c, r) {
   const img = plantSprite(stage, c, r);
   if (!img) return null;
-  // Stage 0 is a small dirt mound OBJECT on the grass (not a ground-cube tile),
-  // so it lifts like every other stage and needs no special-casing - no scale/
-  // flip jitter on the tiny mound though.
-  if (stage === 0) return { img, lift: OBJECT_LIFT, sc: 1, flip: false };
+  // The tree object's data-driven yOffset (fallback to the engine default). Stage 0 is a
+  // small dirt mound OBJECT on the grass, so it shares the same yOffset as the other stages.
+  const yOffset = (GD.objects.tree.yOffset != null) ? GD.objects.tree.yOffset : DEFAULT_Y_OFFSET;
+  if (stage === 0) return { img, yOffset, sc: 1, flip: false };
   const flip = hash01(c, r, (G.world.seed ^ 0x000000a1) >>> 0) < 0.5;
   const sc = 0.9 + hash01(c, r, (G.world.seed ^ 0x000000b2) >>> 0) * 0.2;
-  return { img, lift: OBJECT_LIFT, sc, flip };
+  return { img, yOffset, sc, flip };
 }
 
 // The object occupying a cell (mineable takes precedence; a cell never has both),
@@ -51,13 +66,19 @@ export function cellObject(c, r) {
   if (m) {
     const img = mineableSprite(m);
     if (!img) return null;
-    return { kind: m.typeId, mineable: true, img, lift: OBJECT_LIFT, sc: 1, flip: false, variant: m.variant };
+    // The object's data-driven yOffset, with an optional per-variant override (variantYOffset,
+    // e.g. small fieldstones sit higher); fallback to the engine default.
+    const def = GD.objects[m.typeId] || {};
+    const vyo = def.variantYOffset;
+    const yOffset = (vyo && vyo[m.variant] != null) ? vyo[m.variant]
+      : (def.yOffset != null) ? def.yOffset : DEFAULT_Y_OFFSET;
+    return { kind: m.typeId, mineable: true, img, yOffset, sc: 1, flip: false, variant: m.variant };
   }
   const st = stageAt(c, r);
   if (st >= 0) {
     const dp = plantDrawParams(st, c, r);
     if (!dp) return null;
-    return { kind: "tree", img: dp.img, lift: dp.lift, sc: dp.sc, flip: dp.flip, stage: st };
+    return { kind: "tree", img: dp.img, yOffset: dp.yOffset, sc: dp.sc, flip: dp.flip, stage: st };
   }
   return null;
 }
@@ -102,7 +123,7 @@ export function objectAt(px, py) {
       const s = worldToScreen(center.x, center.y);
       const dw = w * z * obj.sc, dh = h * z * obj.sc;
       const tx = s.x - dw / 2;
-      const ty = s.y - obj.lift * z + (SPRITE / 2) * z - dh; // lift scales with zoom
+      const ty = s.y - obj.yOffset * z + (SPRITE / 2) * z - dh; // yOffset scales with zoom
       if (px < tx || px >= tx + dw || py < ty || py >= ty + dh) continue;
       let sx = (px - tx) / (z * obj.sc);
       const sy = (py - ty) / (z * obj.sc);
@@ -124,6 +145,10 @@ export function objectAt(px, py) {
 export function buildingAt(px, py) {
   if (!G.hasWorld || !G.world.buildings.length) return null;
   const z = G.cam.zoom;
+  // Globe: test each building at its wrapped copy nearest the cursor's cell, so a
+  // building is clickable in any loop (it still returns the canonical building).
+  const refCell = (G.world.wrapX || G.world.wrapY) ? worldToCell(screenToWorld(px, py).x, screenToWorld(px, py).y) : null;
+  const refCol = refCell ? refCell.col : 0, refRow = refCell ? refCell.row : 0;
   const order = G.world.buildings
     .map((b) => ({ b, depth: (b.row + 1) + (b.col + 1) }))
     .sort((a, b) => b.depth - a.depth); // front-most first
@@ -131,7 +156,7 @@ export function buildingAt(px, py) {
     const img = buildingSprite(b);
     if (!img || !img.complete || !img.naturalWidth) continue;
     const w = img.naturalWidth || SPRITE, h = img.naturalHeight || SPRITE;
-    const a = buildingAnchor(b.col, b.row);
+    const a = buildingAnchor(wrapColTo(b.col, refCol), wrapRowTo(b.row, refRow));
     const dw = w * z, dh = h * z;
     const tx = a.x - dw / 2, ty = a.y - dh;
     if (px < tx || px >= tx + dw || py < ty || py >= ty + dh) continue;
@@ -155,8 +180,8 @@ export function blitImage(img, tx, ty, dw, dh, flip) {
     ctx.drawImage(img, tx, ty, dw, dh);
   }
 }
-export function drawSprite(img, s, z, lift, sc, flip) {
-  const r = spriteRect(img, s, z, lift, sc);
+export function drawSprite(img, s, z, yOffset, sc, flip) {
+  const r = spriteRect(img, s, z, yOffset, sc);
   blitImage(img, r.tx, r.ty, r.dw, r.dh, flip);
 }
 // Cast a sprite's pre-built black silhouette so it lies on the ground: pin it
@@ -194,9 +219,9 @@ export function drawShadowRect(img, centerX, r, unit, flip) {
   ctx.restore();
   ctx.globalAlpha = 1;
 }
-export function drawShadow(img, s, z, lift, sc, flip) {
+export function drawShadow(img, s, z, yOffset, sc, flip) {
   if (!img._shadow) return;
-  drawShadowRect(img, s.x, spriteRect(img, s, z, lift, sc), z * sc, flip);
+  drawShadowRect(img, s.x, spriteRect(img, s, z, yOffset, sc), z * sc, flip);
 }
 
 // Floating top-face diamond for the active cell. Drawn in two halves so the
@@ -259,14 +284,17 @@ export function drawBuilding(b, z, bright) {
 
 // Per-cell draw params for a cosmetic decoration sprite: deterministic flip + slight
 // scale jitter (so a field of decorations does not look stamped) and a small
-// data-driven lift. Mirrors plantDrawParams. Returns null if the sprite is not ready.
+// data-driven yOffset. Mirrors plantDrawParams. Returns null if the sprite is not ready.
 function decorDrawParams(idx, c, r) {
   const img = G.decorImages[idx];
   if (!img || !img.complete || !img.naturalWidth) return null;
   const flip = hash01(c, r, (G.world.seed ^ 0x000000c3) >>> 0) < 0.5;
   const sc = 0.8 + hash01(c, r, (G.world.seed ^ 0x000000d4) >>> 0) * 0.35;
-  const lift = (GD.worldgen.decor && GD.worldgen.decor.lift != null) ? GD.worldgen.decor.lift : 0;
-  return { img, lift, sc, flip };
+  const dec = GD.worldgen.decor || {};
+  // Per-sprite yOffset override (spriteYOffset, keyed by sprite index) over the decor default.
+  const syo = dec.spriteYOffset;
+  const yOffset = (syo && syo[idx] != null) ? syo[idx] : (dec.yOffset != null) ? dec.yOffset : 0;
+  return { img, yOffset, sc, flip };
 }
 
 // Draw a single cell's object (rock/tree) OR, on a bare cell, its cosmetic decoration
@@ -277,12 +305,12 @@ function decorDrawParams(idx, c, r) {
 function drawCellObject(c, r, z, activeCell, obj, decorIdx) {
   const isActive = activeCell && activeCell.col === c && activeCell.row === r;
   // Resolve the sprite: a targetable object owns the cell; otherwise a decoration.
-  let img = null, lift = OBJECT_LIFT, sc = 1, flip = false, decor = false;
+  let img = null, yOffset = DEFAULT_Y_OFFSET, sc = 1, flip = false, decor = false;
   if (obj && obj.img.complete && obj.img.naturalWidth) {
-    img = obj.img; lift = obj.lift; sc = obj.sc * popFactor(c, r); flip = obj.flip;
+    img = obj.img; yOffset = obj.yOffset; sc = obj.sc * popFactor(c, r); flip = obj.flip;
   } else if (decorIdx >= 0) {
     const dp = decorDrawParams(decorIdx, c, r);
-    if (dp) { img = dp.img; lift = dp.lift; sc = dp.sc; flip = dp.flip; decor = true; }
+    if (dp) { img = dp.img; yOffset = dp.yOffset; sc = dp.sc; flip = dp.flip; decor = true; }
   }
   if (!img) {
     // Active empty/flat cell still needs its ground ring (no object to wrap).
@@ -292,10 +320,10 @@ function drawCellObject(c, r, z, activeCell, obj, decorIdx) {
   const s = worldToScreen(cellCenter(c, r).x, cellCenter(c, r).y);
   const diamond = isActive ? tileDiamond(s, z) : null;
   if (diamond) strokeDiamondHalf(diamond, "back");
-  if (z >= SHADOW_MIN_ZOOM && !frameShadowSkip) drawShadow(img, s, z, lift, sc, flip); // cast before the sprite (skipped in dense scenes)
+  if (z >= SHADOW_MIN_ZOOM && !frameShadowSkip) drawShadow(img, s, z, yOffset, sc, flip); // cast before the sprite (skipped in dense scenes)
   const hl = !decor && G.hover && G.hover.col === c && G.hover.row === r;
   if (hl) ctx.filter = "brightness(1.6)";
-  drawSprite(img, s, z, lift, sc, flip);
+  drawSprite(img, s, z, yOffset, sc, flip);
   if (hl) ctx.filter = "none";
   if (diamond) strokeDiamondHalf(diamond, "front");
 }
@@ -376,6 +404,9 @@ function drawSmokeFrame(img, cx, baseY, unit, alpha) {
 // canvas backing + DPR transform so the blit is a 1:1 device-pixel copy.
 let floorCanvas = null, floorCtx = null, floorKey = "";
 let glFloorKey = ""; // signature of the cached GL floor instance buffer (rebuild on change)
+// DEV live-reload (gamedata.js): when an edited pack is hot-applied, drop the floor cache so
+// tile-appearance tweaks redraw immediately (entity-pass data already re-reads GD each frame).
+window.addEventListener("tapcraft:packreload", () => { floorKey = ""; glFloorKey = ""; });
 let glWasOn = false; // was the GL path active last frame (force a floor rebuild when it resumes)
 let glWaterTiles = [];     // [{idx,c,r}] cached-floor instance indices of visible water tiles
 let glWaterFrameCached = -1; // the water frame currently baked into the cached floor buffer
@@ -407,7 +438,7 @@ function renderFloor(b, z, waterFrame) {
       floorCtx.drawImage(tImg, sx - dw / 2, sy + half - dh, dw, dh);
       // Coastal shallows: a translucent lighter wash over water near land, stronger
       // closer to shore. Cosmetic + pure per-cell, so it bakes into the cached floor.
-      if (shMax > 0 && shA > 0 && tile === "water") {
+      if (shMax > 0 && shA > 0 && tile === "water" && !iceAt(c, r)) {
         const sd = shoreDist(c, r);
         if (sd >= 1) {
           floorCtx.fillStyle = "rgba(" + shCol[0] + "," + shCol[1] + "," + shCol[2] + "," + (shA * (1 - (sd - 1) / shMax)) + ")";
@@ -435,12 +466,12 @@ function emitFloorGL(b, z, waterFrame) {
       if (!tImg || !tImg.naturalWidth) continue;
       const sx = (c - r) * HALF_W * z + cx, sy = (c + r) * HALF_H * z + cy;
       const dw = (tImg.naturalWidth || SPRITE) * z, dh = (tImg.naturalHeight || SPRITE) * z;
-      if (tile === "water") glWaterTiles.push({ idx: glr.floorInstanceCount(), c, r });
+      if (tile === "water" && !iceAt(c, r)) glWaterTiles.push({ idx: glr.floorInstanceCount(), c, r }); // ice is static, not animated
       // Coastal shallows: lighten + cyan-shift water near shore via a per-instance tint (the
       // GL stand-in for the 2D translucent overlay). Strength fades with shore distance, and
       // it bakes into the cached floor buffer (pure per-cell, like the 2D version).
       let tint = null;
-      if (shMax > 0 && shA > 0 && tile === "water") {
+      if (shMax > 0 && shA > 0 && tile === "water" && !iceAt(c, r)) {
         const sd = shoreDist(c, r);
         if (sd >= 1) {
           const s = shA * (1 - (sd - 1) / shMax);
@@ -473,16 +504,16 @@ function emitShadowRectGL(img, centerX, rect, unit, flip) {
   glr.shadowCast(sh, centerX, groundY, rect.dw, rect.dh, footRows, unit, flip, SHADOW_SKEW, SHADOW_SQUASH, SHADOW_ALPHA * frameShadowMul);
 }
 function emitCellObjectGL(c, r, z, obj, decorIdx) {
-  let img = null, lift = OBJECT_LIFT, sc = 1, flip = false, decor = false;
+  let img = null, yOffset = DEFAULT_Y_OFFSET, sc = 1, flip = false, decor = false;
   if (obj && obj.img.complete && obj.img.naturalWidth) {
-    img = obj.img; lift = obj.lift; sc = obj.sc * popFactor(c, r); flip = obj.flip;
+    img = obj.img; yOffset = obj.yOffset; sc = obj.sc * popFactor(c, r); flip = obj.flip;
   } else if (decorIdx >= 0) {
     const dp = decorDrawParams(decorIdx, c, r);
-    if (dp) { img = dp.img; lift = dp.lift; sc = dp.sc; flip = dp.flip; decor = true; }
+    if (dp) { img = dp.img; yOffset = dp.yOffset; sc = dp.sc; flip = dp.flip; decor = true; }
   }
   if (!img) return;
   const s = worldToScreen(cellCenter(c, r).x, cellCenter(c, r).y);
-  const rect = spriteRect(img, s, z, lift, sc);
+  const rect = spriteRect(img, s, z, yOffset, sc);
   if (z >= SHADOW_MIN_ZOOM) emitShadowRectGL(img, s.x, rect, z * sc, flip);
   const hl = !decor && G.hover && G.hover.col === c && G.hover.row === r;
   glr.sprite(img, rect.tx, rect.ty, rect.dw, rect.dh, flip, hl ? HOVER_TINT : null);
@@ -544,9 +575,15 @@ function drawWorldRingsGL(z, activeCell) {
     const d = tileDiamond(s, z);
     strokeDiamondHalf(d, "back"); strokeDiamondHalf(d, "front");
   }
+  // Globe: shift each ringed building to its in-view wrapped copy (both axes; matches
+  // where the GL entity pass drew it). The 2D path rings ride the shifted entity, so
+  // this is GL-only.
+  const ringRef = (G.world.wrapX || G.world.wrapY)
+    ? (() => { const bb = visibleCellBounds(); return { c: (bb.c0 + bb.c1) / 2, r: (bb.r0 + bb.r1) / 2 }; })()
+    : { c: 0, r: 0 };
   for (const bd of G.world.buildings) {
     if (bd.id === G.hoverBuilding || bd.id === G.selectedBuilding) {
-      const ring = buildingDiamond(bd.col, bd.row, z);
+      const ring = buildingDiamond(wrapColTo(bd.col, ringRef.c), wrapRowTo(bd.row, ringRef.r), z);
       strokeDiamondHalf(ring, "back"); strokeDiamondHalf(ring, "front");
     }
   }
@@ -586,6 +623,12 @@ export function render() {
   if (canvas.style.cursor !== wantCursor) canvas.style.cursor = wantCursor;
   const z = G.cam.zoom;
   const b = visibleCellBounds();
+  // Climate immersion: how snowy / desert the view is (center cell), smoothed. Snow drives
+  // birds/ambience -> wind (ambient.js / sound.js) + rain -> snow + no lightning; desert
+  // thins the rainfall (weather.js). Globe only.
+  const ctrC = Math.round((b.c0 + b.c1) / 2), ctrR = Math.round((b.r0 + b.r1) / 2);
+  G.viewSnow += ((G.world.wrapX ? snownessAt(ctrC, ctrR) : 0) - G.viewSnow) * 0.04;
+  G.viewDesert += ((G.world.wrapX ? desertAt(ctrC, ctrR) : 0) - G.viewDesert) * 0.04;
   // Freeze the water animation when zoomed out so the cached floor stays valid
   // every frame (waves are imperceptible there); animate it only when zoomed in.
   const waterFrame = (z < WATER_ANIM_MIN_ZOOM) ? 0 : waterFrameIndex();
@@ -645,8 +688,9 @@ export function render() {
   let decorCovered = null;
   if (decorOn && G.world.buildings.length) {
     decorCovered = new Set();
+    // Canonical (wrapped) footprint keys so the probe matches on every torus copy.
     for (const bd of G.world.buildings) {
-      for (const [bc, br] of buildingCells(bd.col, bd.row)) decorCovered.add(bc + "," + br);
+      for (const [bc, br] of buildingCells(bd.col, bd.row)) decorCovered.add(wrapCol(bc) + "," + wrapRow(br));
     }
   }
   for (let r = b.r0; r <= b.r1; r++) {
@@ -660,12 +704,20 @@ export function render() {
       // a building. decorAt is base-pure (cacheable); the !obj + !covered guards make it
       // delta-aware so nothing draws under a grown/placed object or a building.
       let decorIdx = -1;
-      if (decorOn && !obj && tile === "grass" && !(decorCovered && decorCovered.has(c + "," + r))) decorIdx = decorAt(c, r);
+      if (decorOn && !obj && tile === "grass" && !(decorCovered && decorCovered.has(wrapCol(c) + "," + wrapRow(r)))) decorIdx = decorAt(c, r);
       if (obj || isActive || decorIdx >= 0) entities.push({ depth: r + c, col: c, c, r, obj, decorIdx, kind: "obj" });
     }
   }
+  // Buildings draw from a list at their canonical cell; on the torus globe, shift each
+  // to the wrapped copy nearest the view center (both axes) so it appears in the
+  // current loop, and skip copies fully off-screen. The shifted cell feeds depth + anchor.
+  const viewCenterC = (b.c0 + b.c1) / 2, viewCenterR = (b.r0 + b.r1) / 2;
   for (const bd of G.world.buildings) {
-    entities.push({ depth: (bd.row + 1) + (bd.col + 1), col: bd.col + 1, bd, kind: "bld" });
+    const dcol = wrapColTo(bd.col, viewCenterC), drow = wrapRowTo(bd.row, viewCenterR);
+    if ((G.world.wrapX && (dcol + 1 < b.c0 - 2 || dcol > b.c1 + 2)) ||
+        (G.world.wrapY && (drow + 1 < b.r0 - 2 || drow > b.r1 + 2))) continue;
+    const dbd = (dcol === bd.col && drow === bd.row) ? bd : Object.assign({}, bd, { col: dcol, row: drow });
+    entities.push({ depth: (drow + 1) + (dcol + 1), col: dcol + 1, bd: dbd, kind: "bld" });
   }
   // Rain ground-splashes: injected at their tile's depth so nearer objects paint
   // over them (a splash never appears on top of a tree/rock - keeps the iso layering).
@@ -860,15 +912,19 @@ function drawDebugOverlay(z) {
     lines.push("tile  '" + tile + "'" + (tImg ? "  sprite " + (tImg.naturalWidth || "?") + "x" + (tImg.naturalHeight || "?") : "  (no sprite)"));
     lines.push("raw  stage=" + stage + " rock=" + rock + " progress=" + prog + " chop=" + chop);
     // Biome classification + the fields that drive it (moisture, normalized height).
-    const bi = inB ? (tile === "water" ? "water" : biomeAt(c, r)) : null;
+    // A water tile reports its hydrology class: ocean / lake / pond / river / stream.
+    const hk = inB ? hydroClassAt(c, r) : null;
+    const bi = inB ? (tile === "water" ? (hk || "water") : biomeAt(c, r)) : null;
     lines.push("biome  " + (bi || "-") + "  moist=" + (inB ? moistureAt(c, r).toFixed(2) : "-") + " up=" + (inB ? uplandAt(c, r).toFixed(2) : "-") + " h=" + (inB ? landHeightAt(c, r).toFixed(2) : "-"));
+    // Globe climate (latitude band): temperature, snowiness, and whether water freezes.
+    if (inB && G.world.wrapX) lines.push("climate  temp=" + temperatureAt(c, r).toFixed(2) + " snow=" + snownessAt(c, r).toFixed(2) + " desert=" + desertAt(c, r).toFixed(2) + (iceAt(c, r) ? "  ICE" : ""));
     // The object the renderer would draw here (rock takes precedence).
     const obj = inB ? cellObject(c, r) : null;
     if (obj) {
       const img = obj.img;
       const matureMark = (obj.kind === "tree") ? (obj.stage >= GD.matureStage ? " MATURE" : "") : "";
       lines.push("object  " + obj.kind + (obj.kind === "tree" ? " stage=" + obj.stage + matureMark : " variant=" + obj.variant));
-      lines.push("  lift=" + obj.lift + " sc=" + (obj.sc || 1).toFixed(2) + " flip=" + (!!obj.flip));
+      lines.push("  yOffset=" + obj.yOffset + " sc=" + (obj.sc || 1).toFixed(2) + " flip=" + (!!obj.flip));
       lines.push("  sprite " + (img && img.naturalWidth || "?") + "x" + (img && img.naturalHeight || "?") + (img && img.complete ? "" : " (loading)"));
       lines.push("  src " + ((img && img.src) ? img.src.split("/").pop() : "(none)"));
     } else {
@@ -886,7 +942,7 @@ function drawDebugOverlay(z) {
       const dp = decorDrawParams(di, c, r);
       const hiddenBy = obj ? "object" : (bd ? "building" : null);
       lines.push("decor  index=" + di + (hiddenBy ? "  (hidden: " + hiddenBy + ")" : ""));
-      if (dp) lines.push("  lift=" + dp.lift + " sc=" + dp.sc.toFixed(2) + " flip=" + (!!dp.flip));
+      if (dp) lines.push("  yOffset=" + dp.yOffset + " sc=" + dp.sc.toFixed(2) + " flip=" + (!!dp.flip));
       lines.push("  sprite " + ((dimg && dimg.naturalWidth) || "?") + "x" + ((dimg && dimg.naturalHeight) || "?") + (dimg && dimg.complete ? "" : " (loading)"));
       lines.push("  src " + ((dimg && dimg.src) ? dimg.src.split("/").pop() : "(none)"));
     } else {

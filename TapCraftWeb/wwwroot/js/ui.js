@@ -15,7 +15,7 @@ import {
   optionsModal, audioRowsEl, eventsEl, dayCounterEl,
 } from "./dom.js";
 import { resizeGL } from "./gl/glrender.js";
-import { fitView, buildingAnchor, centerCameraOn, minZoom } from "./iso.js";
+import { fitView, buildingAnchor, centerCameraOn, minZoom, visibleCellBounds } from "./iso.js";
 import { generate } from "./worldgen.js";
 import {
   readWorldsIndex, saveWorld, loadWorld, deleteWorld, newWorldId, applyPanels,
@@ -209,9 +209,19 @@ export function askDelete(w) {
   confirmModal.classList.remove("hidden");
 }
 
+// Switch the New World modal to a tab by name (a button's data-tab matches a
+// panel's data-panel). Pure DOM toggle; safe to call before the modal is shown.
+function showNewWorldTab(name) {
+  document.querySelectorAll("#tc-newworld .tc-tab").forEach((t) =>
+    t.classList.toggle("tc-tab-active", t.dataset.tab === name));
+  document.querySelectorAll("#tc-newworld .tc-tabpanel").forEach((p) =>
+    p.classList.toggle("tc-tabpanel-active", p.dataset.panel === name));
+}
+
 export function openNewWorld() {
   nameInput.value = suggestWorldName();
   ui.seed.value = randomSeed();
+  showNewWorldTab("world");          // always reopen on the first tab
   mainMenuScreen.classList.add("hidden");
   newWorldModal.classList.remove("hidden");
 }
@@ -229,12 +239,19 @@ export function createWorld() {
     if (!Number.isFinite(n)) n = sl[key].default;
     return Math.min(sl[key].max, Math.max(sl[key].min, n));
   };
-  const infinite = !!(ui.infinite && ui.infinite.checked);
-  const size = infinite ? 0 : clampInt(ui.size.value, sl.size.min, sl.size.max, sl.size.default);
+  // World TYPE: globe (cylindrical, wraps E-W - the default), flat (finite island),
+  // or infinite (endless). Globe size is a circumference; flat uses the map-size
+  // slider; infinite uses neither. `infinite` is kept in settings for back-compat.
+  const worldType = (ui.worldType && ui.worldType.value) || "globe";
+  const infinite = worldType === "infinite";
+  const size = (worldType === "flat") ? clampInt(ui.size.value, sl.size.min, sl.size.max, sl.size.default) : 0;
+  const circumference = clampInt(ui.circ.value, sl.circumference.min, sl.circumference.max, sl.circumference.default);
   let seed = parseInt(ui.seed.value, 10);
   if (!Number.isFinite(seed)) { seed = randomSeed(); ui.seed.value = seed; }
   const settings = {
+    worldType,
     infinite,
+    circumference,
     landFraction: pct(ui.land, "land"),
     growthRate: Math.min(sl.growth.max, Math.max(sl.growth.min, Number(ui.growth.value) || sl.growth.default)),
     forestDensity: pct(ui.density, "density"),
@@ -307,14 +324,30 @@ export function wireUi() {
   ui.size.min = String(GD.sliders.size.min);
   ui.size.max = String(GD.sliders.size.max);
   ui.size.step = String(GD.sliders.size.step || 1);
-  // Infinite worlds ignore the size slider - grey the row out when checked.
-  if (ui.infinite) {
-    const sizeRow = el("tc-size-row");
-    const sync = () => { if (sizeRow) sizeRow.classList.toggle("tc-disabled", ui.infinite.checked); };
-    ui.infinite.addEventListener("change", sync);
+  // World type drives which size control applies: globe -> circumference, flat -> map
+  // size, infinite -> neither. Grey out the irrelevant rows as the type changes.
+  applySliderAttrs(ui.circ, "circumference");
+  if (ui.worldType) {
+    const sizeRow = el("tc-size-row"), circRow = el("tc-circ-row");
+    const sync = () => {
+      const t = ui.worldType.value;
+      if (sizeRow) sizeRow.classList.toggle("tc-disabled", t !== "flat");
+      if (circRow) circRow.classList.toggle("tc-disabled", t !== "globe");
+    };
+    ui.worldType.addEventListener("change", sync);
     sync();
   }
+  // New World: tab strip - clicking a tab shows its panel and hides the others.
+  document.querySelectorAll("#tc-newworld .tc-tab").forEach((t) =>
+    t.addEventListener("click", () => showNewWorldTab(t.dataset.tab)));
   bindSlider(ui.size, ui.sizeVal, (v) => `${v}x${v}`);
+  // Globe-size readout: dimensions, loop distance, and river detail (the hydrology grid
+  // is capped, so rivers coarsen once the circumference passes worldgen.globe.hydroMax).
+  bindSlider(ui.circ, ui.circVal, (v) => {
+    const w = Number(v) | 0, h = Math.round(w / 2);
+    const hMax = (GD.worldgen.globe && GD.worldgen.globe.hydroMax) || 512;
+    return `${w}x${h} - loops every ${w} - ${w <= hMax ? "crisp" : "coarse"} rivers`;
+  });
   bindSlider(ui.land, ui.landVal, (v) => `${v}% land`);
   bindSlider(ui.growth, ui.growthVal, (v) => `${Number(v).toFixed(1)}x`);
   bindSlider(ui.density, ui.densityVal, (v) => `${v}%`);
@@ -666,8 +699,16 @@ export function positionBuildingPanel() {
   if (!b || G.inMenu) { hideBuildingPanel(); return; }
   if (buildingPanel.classList.contains("hidden")) buildingPanel.classList.remove("hidden");
 
-  // Anchor over the building's top, scaled with zoom (clamped readable).
-  const a = buildingAnchor(b.col, b.row);
+  // Anchor over the building's top, scaled with zoom (clamped readable). On the torus
+  // globe, shift to the wrapped copy nearest the view center (both axes) so the panel
+  // tracks the building wherever it is drawn in the current loop.
+  let acol = b.col, arow = b.row;
+  if (G.world.wrapX || G.world.wrapY) {
+    const bb = visibleCellBounds();
+    if (G.world.wrapX) { const n = G.world.cols, ctr = (bb.c0 + bb.c1) / 2; acol = b.col + Math.round((ctr - b.col) / n) * n; }
+    if (G.world.wrapY) { const n = G.world.rows, ctr = (bb.r0 + bb.r1) / 2; arow = b.row + Math.round((ctr - b.row) / n) * n; }
+  }
+  const a = buildingAnchor(acol, arow);
   const scale = Math.min(1.6, Math.max(0.8, G.cam.zoom / 2));
   buildingPanel.style.left = a.x + "px";
   buildingPanel.style.top = (a.y + (TOPBAR_H + SUBBAR_H)) + "px";

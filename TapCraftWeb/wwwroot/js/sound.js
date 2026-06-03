@@ -21,6 +21,28 @@ const AUDIO_KEY = "tapcraft.audio";
 // a module var so it survives track crossfades (every loop fades in toward it).
 let ambienceDuck = 1;
 let rainApplied = -1; // last rain level pushed to the audio graph (throttle re-ramps)
+let viewSnowApplied = 0; // last view-snowiness pushed to the audio graph
+let windSnow = 0;        // current view-snowiness for the wind scheduler (more gusts when snowy)
+
+// Recompute the ambience-loop duck from BOTH rain and view-snowiness: rain ducks the
+// bird/day ambience so it reads through, and a snowy view ducks it harder (cold = quiet
+// but for the wind). Re-applied across track crossfades (every loop fades toward this).
+function applyAmbienceDuck() {
+  const A = G.audio;
+  const birdDuck = (GD.weather && GD.weather.birdDuck != null) ? GD.weather.birdDuck : 0.6;
+  ambienceDuck = Math.max(0, (1 - Math.max(0, rainApplied) * birdDuck) * (1 - viewSnowApplied * 0.9));
+  if (A.ambience && A.ambience.node && A.ambience.node.gain) rampGain(A.ambience.node.gain.gain, ambienceDuck, 0.8);
+}
+// Fade the bird/day ambience down + lean on the wind overlay as the VIEW gets snowy (the
+// cold biome). Called each tick from weather.js with G.viewSnow.
+export function setViewSnowAudio(snow) {
+  const A = G.audio;
+  if (!A.ctx || !A.resumed) return;
+  windSnow = snow;
+  if (Math.abs(snow - viewSnowApplied) < 0.03) return;
+  viewSnowApplied = snow;
+  applyAmbienceDuck();
+}
 
 // Ramp a GainParam toward a target over `sec`, from its current value (no click).
 function rampGain(p, target, sec) {
@@ -280,8 +302,9 @@ function startWind() {
   const w = GD.sounds.overlays && GD.sounds.overlays.wind;
   if (!w || A.windTimer) return;
   const scheduleNext = () => {
-    const gap = w.gapMinMs + Math.random() * (w.gapMaxMs - w.gapMinMs);
-    A.windTimer = setTimeout(playOnce, gap);
+    // A snowy view makes the wind gusts much more frequent (the cold biome's voice).
+    const gap = (w.gapMinMs + Math.random() * (w.gapMaxMs - w.gapMinMs)) * (1 - windSnow * 0.7);
+    A.windTimer = setTimeout(playOnce, Math.max(400, gap));
   };
   const playOnce = () => {
     A.windTimer = null;
@@ -345,9 +368,7 @@ export function setRainAudio(level) {
   if (!A.ctx || !A.resumed) return;
   if (Math.abs(level - rainApplied) < 0.02 && !(level <= 0.04 && A.overlays.rain)) return;
   rainApplied = level;
-  const duckAmt = (GD.weather && GD.weather.birdDuck != null) ? GD.weather.birdDuck : 0.6;
-  ambienceDuck = Math.max(0, 1 - level * duckAmt);
-  if (A.ambience && A.ambience.node && A.ambience.node.gain) rampGain(A.ambience.node.gain.gain, ambienceDuck, 0.8);
+  applyAmbienceDuck(); // combined rain + view-snow duck of the bird ambience
   const wantRain = level > 0.04;
   if (wantRain) {
     if (!A.overlays.rain) startOverlay("rain");

@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<!--
+  TapCraft GLOBE/WORLD preview (dev tool, NOT shipped). Open directly in a browser.
+  Models a CYLINDRICAL world: it WRAPS east-west (drag the map sideways and it loops
+  seamlessly back to the start) and is bounded north-south with real POLES. Going finite
+  lets us run global passes the infinite engine can't: continents from wrapping noise,
+  latitude-based climate (ice caps -> temperate -> tropics), and HYDROLOGY (priority-flood
+  basin filling -> lakes, flow accumulation -> rivers).
+
+  This is a top-down equirectangular world map (what the planet "is"); in-game it would
+  still render isometric. Drag = pan (x wraps, y clamps at the poles). Sliders regenerate.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>TapCraft - globe/world preview</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0c1018; color: #cdd6e6; font: 13px/1.45 Consolas, monospace; }
+  .wrap { display: flex; gap: 16px; padding: 16px; align-items: flex-start; flex-wrap: wrap; }
+  canvas { border: 1px solid #2a3550; background: #000; cursor: grab; }
+  canvas.drag { cursor: grabbing; }
+  .panel { width: 300px; }
+  h1 { font-size: 15px; margin: 0 0 4px; color: #8fb4ff; }
+  .sub { color: #7f8aa3; margin: 0 0 12px; }
+  .row { margin: 7px 0; display: grid; grid-template-columns: 118px 1fr 46px; gap: 8px; align-items: center; }
+  .row label { color: #9fb0d0; }
+  .row .val { text-align: right; color: #cfe; }
+  input[type=range] { width: 100%; }
+  input[type=number] { background: #161c2a; color: #cdd6e6; border: 1px solid #2a3550; padding: 3px 6px; font: inherit; width: 90px; }
+  button { background: #21304e; color: #cdd6e6; border: 1px solid #3a4f7a; padding: 5px 10px; font: inherit; cursor: pointer; border-radius: 4px; }
+  button:hover { background: #2a3c5e; }
+  .stat { margin-top: 10px; padding: 8px 10px; background: #11161f; border: 1px solid #2a3550; border-radius: 4px; }
+  .stat b { color: #8fdc9f; }
+  .legend { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; margin-top: 8px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .sw { width: 12px; height: 12px; display: inline-block; border: 1px solid #00000055; }
+  .note { color: #7f8aa3; margin-top: 10px; }
+  label.chk { color: #9fb0d0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <canvas id="cv" width="768" height="384"></canvas>
+  <div class="panel">
+    <h1>Globe / world preview</h1>
+    <p class="sub">Cylindrical world: wraps E-W, poles N-S. Drag to pan (x loops).</p>
+
+    <div class="row"><label for="seed">Seed</label><input id="seed" type="number" value="1337" /><button id="rnd">rnd</button></div>
+    <div class="row"><label>Land %</label><input id="land" type="range" min="15" max="70" step="1" value="32" /><span class="val" id="landV"></span></div>
+    <div class="row"><label>Continent size</label><input id="csize" type="range" min="1" max="12" step="0.5" value="5" /><span class="val" id="csizeV"></span></div>
+    <div class="row"><label>Coast detail</label><input id="detail" type="range" min="5" max="60" step="1" value="28" /><span class="val" id="detailV"></span></div>
+    <div class="row"><label>Sharpen</label><input id="sharp" type="range" min="100" max="450" step="10" value="260" /><span class="val" id="sharpV"></span></div>
+    <div class="row"><label>Warp</label><input id="warp" type="range" min="0" max="50" step="1" value="18" /><span class="val" id="warpV"></span></div>
+    <div class="row"><label>Rivers</label><input id="rivers" type="range" min="20" max="600" step="10" value="140" /><span class="val" id="riversV"></span></div>
+    <div class="row"><label>Pole cold</label><input id="cold" type="range" min="0" max="100" step="1" value="55" /><span class="val" id="coldV"></span></div>
+    <div class="row"><label class="chk"><input id="grid" type="checkbox" /> equator/pole lines</label><span></span><span></span></div>
+
+    <div class="stat">
+      land: <b id="landStat">-</b> &nbsp; lakes: <b id="lakeStat">-</b> &nbsp; gen: <b id="msStat">-</b>
+      <div class="legend">
+        <span><i class="sw" style="background:#1e3c6e"></i>ocean</span>
+        <span><i class="sw" style="background:#c8d7e6"></i>sea ice</span>
+        <span><i class="sw" style="background:#5a8cc8"></i>river</span>
+        <span><i class="sw" style="background:#46689c"></i>lake</span>
+        <span><i class="sw" style="background:#f0f4fa"></i>ice cap</span>
+        <span><i class="sw" style="background:#969687"></i>tundra</span>
+        <span><i class="sw" style="background:#325f46"></i>taiga</span>
+        <span><i class="sw" style="background:#78a555"></i>grass</span>
+        <span><i class="sw" style="background:#46783f"></i>forest</span>
+        <span><i class="sw" style="background:#37783c"></i>jungle</span>
+        <span><i class="sw" style="background:#d2c38c"></i>desert</span>
+        <span><i class="sw" style="background:#787880"></i>mountain</span>
+      </div>
+    </div>
+    <p class="note" id="hint">Tip: drag sideways to watch it wrap. Lower "Continent size" for big landmasses; raise "Rivers" slider DOWN (lower threshold) for more rivers.</p>
+  </div>
+</div>
+
+<script>
+"use strict";
+const W = 512, H = 256;            // world grid (equirectangular 2:1)
+const D8 = [[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1]];
+const WARP_SCALE = 0.08, BASE_SCALE = 0.045;
+const clamp01 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = (t) => t * t * (3 - 2 * t);
+const sCurve = (e, p) => e <= 0.5 ? 0.5 * Math.pow(e * 2, p) : 1 - 0.5 * Math.pow((1 - e) * 2, p);
+
+// ---- 3D value-noise (so we can sample on a circle -> seamless E-W wrap) -------
+function hash3(x, y, z, seed) {
+  let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(z | 0, 2147483647) + Math.imul(seed | 0, 362437);
+  h = Math.imul(h ^ (h >>> 13), 1274126177); h ^= h >>> 16;
+  return (h >>> 0) / 4294967295;
+}
+function makeFbm3(seed, octaves) {
+  const val = (x, y, z) => {
+    const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+    const xf = x - xi, yf = y - yi, zf = z - zi;
+    const u = smooth(xf), v = smooth(yf), w = smooth(zf);
+    const c = (a, b, d) => hash3(xi + a, yi + b, zi + d, seed);
+    const x00 = lerp(c(0,0,0), c(1,0,0), u), x10 = lerp(c(0,1,0), c(1,1,0), u);
+    const x01 = lerp(c(0,0,1), c(1,0,1), u), x11 = lerp(c(0,1,1), c(1,1,1), u);
+    return lerp(lerp(x00, x10, v), lerp(x01, x11, v), w);
+  };
+  return (x, y, z) => {
+    let amp = 0.5, freq = 1, sum = 0, norm = 0;
+    for (let o = 0; o < octaves; o++) { sum += amp * val(x * freq, y * freq, z * freq); norm += amp; amp *= 0.5; freq *= 2; }
+    return sum / norm;
+  };
+}
+let N = {};
+function buildNoise(seed) {
+  N = {
+    base: makeFbm3(seed >>> 0, 6), cont: makeFbm3((seed ^ 0xc0ffee01) >>> 0, 2),
+    warpX: makeFbm3((seed ^ 0x9e3779b9) >>> 0, 4), warpY: makeFbm3((seed ^ 0x85ebca6b) >>> 0, 4),
+    moist: makeFbm3((seed ^ 0x2c1b3a9f) >>> 0, 3), temp: makeFbm3((seed ^ 0x1b56c4e9) >>> 0, 3),
+  };
+}
+const R = W / (2 * Math.PI);       // circle radius so arc-length per cell = 1
+// Sample a wrapping field: x -> angle on a circle (seamless), y -> the 3rd (latitude) axis.
+function wrap(fbm, x, y, freq) {
+  const th = 2 * Math.PI * x / W;
+  return fbm(Math.cos(th) * R * freq, y * freq, Math.sin(th) * R * freq);
+}
+
+// ---- min-heap for priority-flood ----------------------------------------------
+function MinHeap(cap) { this.e = new Float32Array(cap); this.i = new Int32Array(cap); this.n = 0; }
+MinHeap.prototype.push = function (e, i) {
+  let k = this.n++; this.e[k] = e; this.i[k] = i;
+  while (k > 0) { const p = (k - 1) >> 1; if (this.e[p] <= this.e[k]) break; this._sw(p, k); k = p; }
+};
+MinHeap.prototype.pop = function () {
+  const ri = this.i[0]; this.n--;
+  if (this.n > 0) {
+    this.e[0] = this.e[this.n]; this.i[0] = this.i[this.n]; let k = 0;
+    for (;;) { let l = 2 * k + 1, r = 2 * k + 2, m = k;
+      if (l < this.n && this.e[l] < this.e[m]) m = l;
+      if (r < this.n && this.e[r] < this.e[m]) m = r;
+      if (m === k) break; this._sw(m, k); k = m; }
+  }
+  return ri;
+};
+MinHeap.prototype._sw = function (a, b) { const e = this.e[a]; this.e[a] = this.e[b]; this.e[b] = e; const i = this.i[a]; this.i[a] = this.i[b]; this.i[b] = i; };
+
+// ---- palette ------------------------------------------------------------------
+const COL = {
+  oceanDeep: [22, 46, 86], oceanShallow: [58, 108, 158], seaIce: [200, 215, 230],
+  river: [90, 140, 200], lake: [70, 104, 156], frozen: [196, 214, 232],
+  ice: [240, 244, 250], rock: [120, 120, 130], beach: [214, 200, 150],
+  tundra: [150, 150, 135], taiga: [50, 95, 70], grass: [120, 165, 85],
+  forest: [70, 120, 63], steppe: [170, 162, 110], desert: [210, 195, 140],
+  savanna: [184, 180, 104], jungle: [55, 120, 60],
+};
+function biome(temp, moist) {
+  if (temp < 0.18) return moist > 0.4 ? COL.taiga : COL.tundra;
+  if (temp < 0.50) return moist > 0.6 ? COL.forest : moist > 0.3 ? COL.grass : COL.steppe;
+  return moist > 0.6 ? COL.jungle : moist > 0.33 ? COL.savanna : COL.desert;
+}
+
+// ---- world generation (the interesting part) ----------------------------------
+const worldCv = document.createElement("canvas"); worldCv.width = W; worldCv.height = H;
+const worldCtx = worldCv.getContext("2d");
+const worldImg = worldCtx.createImageData(W, H);
+let stats = { land: 0, lake: 0, ms: 0 };
+
+function generate() {
+  const t0 = performance.now();
+  const P = {
+    land: +el("land").value / 100, cscale: (+el("csize").value) / 1000 * 1.4, detail: +el("detail").value / 100,
+    sharp: +el("sharp").value / 100, warp: +el("warp").value, riverThr: +el("rivers").value, cold: +el("cold").value / 100,
+  };
+  // 1) elevation - wrapping continental blend + redistribution
+  const elev = new Float32Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const aw = (wrap(N.warpX, x, y, WARP_SCALE) * 2 - 1) * P.warp;
+    const bw = (wrap(N.warpY, x, y, WARP_SCALE) * 2 - 1) * P.warp;
+    const xx = x + aw, yy = y + bw;
+    const cont = wrap(N.cont, xx, yy, P.cscale);
+    const detail = wrap(N.base, xx, yy, BASE_SCALE);
+    elev[y * W + x] = sCurve(clamp01(cont * (1 - P.detail) + detail * P.detail), P.sharp);
+  }
+  // 2) sea level for the target land %
+  const samp = []; for (let i = 0; i < elev.length; i += 5) samp.push(elev[i]);
+  samp.sort((a, b) => a - b);
+  const sea = samp[Math.min(samp.length - 1, Math.floor((1 - P.land) * samp.length))];
+  // 3) priority-flood: fill basins (-> lakes), make all land drain to ocean/poles
+  const filled = new Float32Array(W * H).fill(Infinity);
+  const seen = new Uint8Array(W * H);
+  const heap = new MinHeap(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    if (elev[i] < sea || y === 0 || y === H - 1) { filled[i] = elev[i]; seen[i] = 1; heap.push(elev[i], i); }
+  }
+  while (heap.n > 0) {
+    const i = heap.pop(); const x = i % W, y = (i / W) | 0;
+    for (let k = 0; k < 8; k++) {
+      const nx = (x + D8[k][0] + W) % W, ny = y + D8[k][1]; if (ny < 0 || ny >= H) continue;
+      const ni = ny * W + nx; if (seen[ni]) continue;
+      seen[ni] = 1; filled[ni] = Math.max(elev[ni], filled[i]); heap.push(filled[ni], ni);
+    }
+  }
+  // 4) flow accumulation on the filled surface (steepest descent, processed high->low)
+  const acc = new Float32Array(W * H).fill(1);
+  const order = new Int32Array(W * H); for (let i = 0; i < order.length; i++) order[i] = i;
+  order.sort((a, b) => filled[b] - filled[a]);
+  for (let o = 0; o < order.length; o++) {
+    const i = order[o]; if (elev[i] < sea) continue;
+    const x = i % W, y = (i / W) | 0; let best = -1, bestF = filled[i];
+    for (let k = 0; k < 8; k++) {
+      const nx = (x + D8[k][0] + W) % W, ny = y + D8[k][1]; if (ny < 0 || ny >= H) continue;
+      const ni = ny * W + nx; if (filled[ni] < bestF) { bestF = filled[ni]; best = ni; }
+    }
+    if (best >= 0) acc[best] += acc[i];
+  }
+  // 5) climate + color
+  let landN = 0, lakeN = 0;
+  for (let y = 0; y < H; y++) {
+    const lat = y / (H - 1), clat = Math.abs(lat - 0.5) * 2; // 0 equator .. 1 pole
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x, e = elev[i], landH = e - sea;
+      const tNoise = (wrap(N.temp, x, y, 0.01) * 2 - 1) * 0.06;
+      const temp = clamp01((1 - clat * (0.6 + P.cold * 0.8)) - Math.max(0, landH) * 0.9 + tNoise);
+      const moist = wrap(N.moist, x, y, P.cscale * 1.3);
+      const o = i * 4; let col;
+      if (e < sea) {                                   // ocean
+        if (temp < 0.10) col = COL.seaIce;
+        else { const d = clamp01((sea - e) / 0.35); col = [lerp(COL.oceanShallow[0], COL.oceanDeep[0], d), lerp(COL.oceanShallow[1], COL.oceanDeep[1], d), lerp(COL.oceanShallow[2], COL.oceanDeep[2], d)]; }
+      } else {
+        landN++;
+        const isLake = filled[i] > e + 0.0015;
+        const isRiver = !isLake && acc[i] > P.riverThr;
+        if (isLake) { lakeN++; col = temp < 0.12 ? COL.frozen : COL.lake; }
+        else if (isRiver) { col = temp < 0.12 ? COL.frozen : COL.river; }
+        else {
+          const snowLine = lerp(0.02, 0.42, clamp01(temp));   // colder -> lower snow line
+          if (landH > snowLine) col = landH > snowLine + 0.12 ? COL.ice : COL.rock;
+          else if (landH < 0.012 && temp > 0.14) col = COL.beach;
+          else col = biome(temp, moist);
+        }
+      }
+      worldImg.data[o] = col[0]; worldImg.data[o + 1] = col[1]; worldImg.data[o + 2] = col[2]; worldImg.data[o + 3] = 255;
+    }
+  }
+  if (el("grid").checked) {                            // faint equator + polar circles
+    for (let x = 0; x < W; x++) for (const yy of [Math.floor(H / 2), Math.floor(H * 0.2), Math.floor(H * 0.8)]) {
+      const o = (yy * W + x) * 4; worldImg.data[o] = 255; worldImg.data[o + 1] = 255; worldImg.data[o + 2] = 255; worldImg.data[o + 3] = 255;
+    }
+  }
+  worldCtx.putImageData(worldImg, 0, 0);
+  stats = { land: 100 * landN / elev.length, lake: 100 * lakeN / elev.length, ms: performance.now() - t0 };
+  el("landStat").textContent = stats.land.toFixed(1) + "%";
+  el("lakeStat").textContent = stats.lake.toFixed(2) + "%";
+  el("msStat").textContent = stats.ms.toFixed(0) + " ms";
+  drawView();
+}
+
+// ---- view (tile worldCv in x for the seamless E-W wrap; y fits exactly) --------
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+let panX = 0; // in world cells
+function drawView() {
+  ctx.imageSmoothingEnabled = true;
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  const sc = cv.height / H;                  // vertical fit (768x384 = 1.5x of 512x256)
+  const wpx = W * sc;                          // world width in screen px
+  let ox = -((panX % W) * sc); if (ox > 0) ox -= wpx;
+  for (let dx = ox; dx < cv.width; dx += wpx) ctx.drawImage(worldCv, dx, 0, wpx, cv.height);
+}
+
+// ---- controls -----------------------------------------------------------------
+function el(id) { return document.getElementById(id); }
+const labels = { land: (v) => v + "%", csize: (v) => v, detail: (v) => v + "%", sharp: (v) => (v / 100).toFixed(1) + "x", warp: (v) => v, rivers: (v) => "thr " + v, cold: (v) => v + "%" };
+function syncLabels() { for (const k of Object.keys(labels)) { const e = el(k + "V"); if (e) e.textContent = labels[k](el(k).value); } }
+let timer = 0;
+function schedule() { syncLabels(); clearTimeout(timer); timer = setTimeout(generate, 60); }
+for (const id of ["land", "csize", "detail", "sharp", "warp", "rivers", "cold", "grid"]) el(id).addEventListener("input", schedule);
+el("seed").addEventListener("input", () => { buildNoise(+el("seed").value | 0); schedule(); });
+el("rnd").addEventListener("click", () => { el("seed").value = (Math.random() * 1e9) | 0; buildNoise(+el("seed").value | 0); schedule(); });
+
+let drag = null;
+cv.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, px: panX }; cv.classList.add("drag"); cv.setPointerCapture(e.pointerId); });
+cv.addEventListener("pointermove", (e) => { if (!drag) return; const sc = cv.height / H; panX = drag.px - (e.clientX - drag.x) / sc; drawView(); });
+cv.addEventListener("pointerup", () => { drag = null; cv.classList.remove("drag"); });
+
+buildNoise(+el("seed").value | 0);
+syncLabels(); generate();
+</script>
+</body>
+</html>

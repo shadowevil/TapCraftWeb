@@ -79,16 +79,23 @@ function growthTick() {
   let innerR = -1;
   for (const band of bands) {
     const R = band.radius | 0;
-    if (t % band.period === 0) {
-      const exact = band.period === 1;
-      const box = clampBox(cc - R, cc + R, cr - R, cr + R);
-      for (let r = box.r0; r <= box.r1; r++) {
-        const dr = Math.abs(r - cr);
-        for (let c = box.c0; c <= box.c1; c++) {
-          const cheb = Math.max(Math.abs(c - cc), dr);
-          if (cheb <= innerR || cheb > R) continue; // owned by an inner band / outside this ring
-          grow(c, r, exact, band.period);
-        }
+    const period = (band.period | 0) || 1;
+    const exact = period === 1;
+    const slice = t % period;            // which row-slice this band grows on this tick
+    const box = clampBox(cc - R, cc + R, cr - R, cr + R);
+    for (let r = box.r0; r <= box.r1; r++) {
+      // Outer bands are AMORTIZED across their period instead of firing the whole ring on
+      // one tick: each tick grows only the rows in this tick's slice (mult=period keeps the
+      // per-cell gain identical), so the ring is fully covered once per `period` ticks. This
+      // turns the old once-per-8 / once-per-40 BURSTS (~17k / ~45k cells in a single tick,
+      // which also thrashed the cell cache and stalled the next render) into a steady
+      // trickle - no periodic growth spike. Band 0 (period 1) still grows fully every tick.
+      if (!exact && ((((r - cr) % period) + period) % period) !== slice) continue;
+      const dr = Math.abs(r - cr);
+      for (let c = box.c0; c <= box.c1; c++) {
+        const cheb = Math.max(Math.abs(c - cc), dr);
+        if (cheb <= innerR || cheb > R) continue; // owned by an inner band / outside this ring
+        grow(c, r, exact, period);
       }
     }
     innerR = R;

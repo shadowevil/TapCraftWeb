@@ -13,7 +13,7 @@ import { buildingCells } from "./iso.js";
 import { inBounds } from "./rng.js";
 import { cellObject } from "./render.js";
 import { mineableAt } from "./mineable.js";
-import { tileAt, stageAt, rockRawAt, clampBox } from "./cells.js";
+import { tileAt, stageAt, rockRawAt, clampBox, wrapCol, wrapRow } from "./cells.js";
 import { doHarvest, toolDurabilityFor } from "./resources.js";
 import { updateResourceUI } from "./ui.js";
 import { updateCraftedHud } from "./crafting.js";
@@ -51,6 +51,8 @@ export function canAffordBuilding(type) {
 // Place a building at rear-anchor (col,row). Returns the new building or null
 // if invalid/unaffordable. Deducts the build cost.
 export function placeBuilding(type, col, row, facing) {
+  if (G.world.wrapX) col = wrapCol(col); // torus globe: store canonical (wrapped) coords
+  if (G.world.wrapY) row = wrapRow(row);
   if (!canPlaceFootprint(type, col, row) || !canAffordBuilding(type)) return null;
   const cost = GD.buildings[type].buildCost;
   G.world.wood -= cost.wood;
@@ -232,7 +234,8 @@ export function findBuilding(id) {
 
 function footprintKeys(col, row) {
   const set = new Set();
-  for (const [c, r] of buildingCells(col, row)) set.add(c + "," + r);
+  // Canonical coords so overlap detection holds across both torus seams.
+  for (const [c, r] of buildingCells(col, row)) set.add(wrapCol(c) + "," + wrapRow(r));
   return set;
 }
 

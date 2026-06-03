@@ -18,7 +18,7 @@ import { GD } from "./gamedata.js";
 import { HALF_W, HALF_H, SHADOW_SKEW, SHADOW_SQUASH } from "./config.js";
 import { canvas, ctx } from "./dom.js";
 import { screenToWorld, worldToScreen, worldToCell, cellCenter } from "./iso.js";
-import { tileAt } from "./cells.js";
+import { tileAt, snownessAt } from "./cells.js";
 import { dayAmount, weatherCloud, weatherRain } from "./env.js";
 
 let clouds = [], birds = [], swarms = [], moonbeams = [], inited = false;
@@ -51,11 +51,19 @@ function wsNum(key, fallback) {
   return (typeof v === "number" && isFinite(v)) ? v : fallback;
 }
 // Total target bug population for this world (per-world override or data default).
-function bugTotal() { return wsNum("bugs", (GD.ambient.bugs && GD.ambient.bugs.count) | 0); }
+// On a globe, bugs thin out toward the frozen biome (G.viewSnow).
+function bugTotal() {
+  const n = wsNum("bugs", (GD.ambient.bugs && GD.ambient.bugs.count) | 0);
+  return G.world.wrapX ? Math.round(n * (1 - (G.viewSnow || 0) * 0.9)) : n;
+}
 // Cloud-count budget (per-world override or data default).
 function cloudBudget() { return wsNum("cloudCount", (GD.ambient.clouds && GD.ambient.clouds.count) || 5); }
-// Bird population cap (per-world override or data default).
-function birdMax() { return wsNum("birds", (GD.ambient.birds && GD.ambient.birds.max) | 0); }
+// Bird population cap (per-world override or data default). On a globe, birds all but
+// vanish in the snowy biome (G.viewSnow) - the view fades to just wind.
+function birdMax() {
+  const m = wsNum("birds", (GD.ambient.birds && GD.ambient.birds.max) | 0);
+  return G.world.wrapX ? Math.round(m * (1 - (G.viewSnow || 0) * 0.95)) : m;
+}
 
 function nearLand(col, row) {
   for (let dr = -2; dr <= 2; dr++) {
@@ -207,6 +215,8 @@ function newBug(s) {
 function newSwarm() {
   const a = GD.ambient.bugs, p = landSpawnWorld();
   if (!p) return null; // no land in view -> no swarm (no bugs over open ocean)
+  // No bug swarms in the snow biome (globe) - bugs belong to warmer ground.
+  if (G.world.wrapX) { const cell = worldToCell(p.wx, p.wy); if (snownessAt(cell.col, cell.row) > 0.4) return null; }
   const s = { wx: p.wx, wy: p.wy, ang: rand(0, Math.PI * 2),
     sp: (a.swarmSpeed || 12) * rand(0.6, 1.4), t: 0,
     next: rand(pick(a.wanderMs, 0, 700), pick(a.wanderMs, 1, 1800)),

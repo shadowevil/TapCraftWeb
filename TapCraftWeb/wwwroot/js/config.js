@@ -11,7 +11,7 @@
 export const SPRITE = 32;     // base tile sprite is 32x32
 export const HALF_W = 16;     // surface diamond half-width
 export const HALF_H = 8;      // surface diamond half-height
-export const OBJECT_LIFT = 8; // upward nudge for tall sprites, in sprite px (scaled by zoom)
+export const DEFAULT_Y_OFFSET = 8; // default sprite yOffset (upward nudge), sprite px scaled by zoom. Per-object override: GD.objects.<id>.yOffset
 
 // --- Loop timing (engine) ---------------------------------------------
 export const TPS = 20;                  // simulation ticks per second
@@ -42,11 +42,11 @@ export const SHADOW_MIN_ZOOM = 0.9;
 // cached to an offscreen layer; freezing water keeps that cache valid every frame
 // when zoomed out (waves are imperceptible there) so the floor isn't re-rendered.
 export const WATER_ANIM_MIN_ZOOM = 2.0;
-// Below this zoom cosmetic ground-cover decorations (flowers/grass patches) are not
-// drawn: they are sub-pixel/imperceptible far out, and probing every visible cell for
-// one would bloat the entity pass over huge/infinite worlds. Same spirit as
-// SHADOW_MIN_ZOOM. `z` is part of the floor-cache key, so crossing this rebuilds.
-export const DECOR_MIN_ZOOM = 1.2;
+// Min zoom to draw cosmetic ground-cover decorations (flowers/grass patches). 0 = always
+// drawn, even fully zoomed out (on smaller screens the max zoom-out can fall below an old
+// 1.2 gate, which made foliage vanish). The visible-cell cap (MAX_VISIBLE_CELLS) already
+// bounds how many are probed/drawn each frame, and the WebGL batch keeps them cheap.
+export const DECOR_MIN_ZOOM = 0;
 // Above this many visible entities (a dense forest/jungle filling the screen), per-object
 // cast shadows are skipped this frame: at that density they overlap into mush, and the
 // extra ~2 drawImage + canvas transform per object dominates the entity pass. The skip

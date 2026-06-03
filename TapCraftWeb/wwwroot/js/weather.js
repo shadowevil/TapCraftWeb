@@ -18,7 +18,7 @@ import { HALF_W, HALF_H } from "./config.js";
 import { tileAt, stageAt, rockRawAt } from "./cells.js";
 import { weatherRain, weatherKind } from "./env.js";
 import { cloudShadowAt, randomCloudInView } from "./ambient.js";
-import { setRainAudio, playThunder } from "./sound.js";
+import { setRainAudio, playThunder, setViewSnowAudio } from "./sound.js";
 
 let rainDrops = [], splashes = [], splashAcc = 0;
 let flashes = [], strikeTimer = 0, pendingThunder = []; // lightning: active flashes + next-strike countdown + scheduled claps
@@ -41,6 +41,7 @@ function resetDrop(d) {
   d.x = Math.random() * (W() + 200) - 100;
   d.y = -20 - Math.random() * 40;
   d.sp = 0.7 + Math.random() * 0.6; // per-drop speed variation
+  d.ph = Math.random() * 6283;      // sway phase (used when it falls as snow)
 }
 function newDrop(spread) { const d = { x: 0, y: 0, sp: 1 }; resetDrop(d); if (spread) d.y = Math.random() * H(); return d; }
 
@@ -62,8 +63,11 @@ export function updateWeather(dtMs) {
   // so rain/splashes without the dimming would look out of place); clear any carryover.
   if (G.inMenu) { if (rainDrops.length || splashes.length) { rainDrops.length = 0; splashes.length = 0; } setRainAudio(0); return; }
   const dt = Math.min(0.05, dtMs / 1000);
-  const rain = weatherRain();
+  // Deserts are dry: thin the live rainfall (drops + splashes + audio) where the view is desert.
+  const dcut = (GD.worldgen && GD.worldgen.climate && GD.worldgen.climate.desertRainCut != null) ? GD.worldgen.climate.desertRainCut : 0.8;
+  const rain = weatherRain() * (1 - (G.viewDesert || 0) * dcut);
   setRainAudio(rain); // rain overlay + bird-ambience duck follow the live rain level
+  setViewSnowAudio(G.viewSnow || 0); // snowy view: bird ambience down, wind gusts up
 
   const cfg = GD.weather.rain || {};
   const intensity = rainIntensity();
@@ -73,16 +77,23 @@ export function updateWeather(dtMs) {
   const target = Math.round((cfg.drops || 0) * rain * intensity);
   while (rainDrops.length < target) rainDrops.push(newDrop(true));
   if (rainDrops.length > target) rainDrops.length = target;
+  // Snow: in the cold (globe) view the same precipitation falls SLOWER and SWAYS instead
+  // of streaking down. `snow` (0..1) crossfades the motion + look between rain and snow.
+  const snow = G.viewSnow || 0;
+  const scfg = GD.weather.snow || {};
+  const fallMul = 1 - snow * (1 - (scfg.fallMul != null ? scfg.fallMul : 0.42));
+  const drift = (scfg.drift != null ? scfg.drift : 34) * snow;
   const sp = cfg.speed || 1500, slant = cfg.slant || 0.22;
   for (const d of rainDrops) {
-    d.y += sp * d.sp * dt;
-    d.x += sp * d.sp * slant * dt;
+    d.y += sp * d.sp * fallMul * dt;
+    d.x += sp * d.sp * slant * dt * (1 - snow) + Math.sin((G.animTime + d.ph) * 0.002) * drift * dt;
     if (d.y > h + 24 || d.x > w + 24 || d.x < -24) resetDrop(d);
   }
 
   // Ground splashes: spawn on open ground UNDER A CLOUD in view, at a rain-scaled
   // rate; expire after splashMs.
-  splashAcc += rain * (cfg.splashRate || 0) * intensity * dt;
+  // Snow barely splashes - fade the ground splashes out as the view gets snowy.
+  splashAcc += rain * (cfg.splashRate || 0) * intensity * dt * (1 - snow * (1 - (scfg.splashMul != null ? scfg.splashMul : 0.12)));
   const b = visibleCellBounds();
   const dur = cfg.splashMs || 430;
   let guard = 0;
@@ -111,8 +122,9 @@ export function updateWeather(dtMs) {
   for (let i = splashes.length - 1; i >= 0; i--) if (G.animTime - splashes[i].t0 >= dur * 1.4) splashes.splice(i, 1);
 
   // --- Lightning (storm only) ---
+  // Storms in the cold become snowstorms: suppress lightning above noLightningView snowiness.
   const ln = GD.weather.lightning;
-  if (ln && weatherKind() === "storm") {
+  if (ln && weatherKind() === "storm" && snow < (scfg.noLightningView != null ? scfg.noLightningView : 0.5)) {
     strikeTimer -= dtMs;
     if (strikeTimer <= 0) {
       strikeTimer = (ln.strikeGapMinMs || 2500) + Math.random() * ((ln.strikeGapMaxMs || 9000) - (ln.strikeGapMinMs || 2500));
@@ -195,18 +207,35 @@ export function renderLightning() {
 export function renderRain() {
   if (!GD.weather || !rainDrops.length) return;
   const cfg = GD.weather.rain || {};
-  const col = cfg.color || [165, 190, 230];
-  const len = cfg.length || 20, slant = cfg.slant || 0.22;
+  const snow = G.viewSnow || 0;
   ctx.save();
-  ctx.strokeStyle = "rgba(" + col[0] + ", " + col[1] + ", " + col[2] + ", " + (cfg.alpha != null ? cfg.alpha : 0.28) + ")";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (const d of rainDrops) {
-    const wp = screenToWorld(d.x, d.y);
-    if (cloudShadowAt(wp.x, wp.y) < CLOUD_MIN) continue; // drops only show under clouds (world-anchored, not camera-locked)
-    ctx.moveTo(d.x, d.y); ctx.lineTo(d.x - slant * len, d.y - len);
+  // Rain streaks: fade out as the view gets snowy.
+  if (snow < 0.985) {
+    const col = cfg.color || [165, 190, 230];
+    const len = cfg.length || 20, slant = cfg.slant || 0.22;
+    ctx.strokeStyle = "rgba(" + col[0] + ", " + col[1] + ", " + col[2] + ", " + ((cfg.alpha != null ? cfg.alpha : 0.28) * (1 - snow)).toFixed(3) + ")";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const d of rainDrops) {
+      const wp = screenToWorld(d.x, d.y);
+      if (cloudShadowAt(wp.x, wp.y) < CLOUD_MIN) continue; // drops only show under clouds (world-anchored)
+      ctx.moveTo(d.x, d.y); ctx.lineTo(d.x - slant * len, d.y - len);
+    }
+    ctx.stroke();
   }
-  ctx.stroke();
+  // Snow flakes: fade in as the view gets snowy (drawn as soft round dots, batched in one fill).
+  if (snow > 0.015) {
+    const scfg = GD.weather.snow || {};
+    const col = scfg.color || [236, 243, 255], size = (scfg.size != null ? scfg.size : 1.7);
+    ctx.fillStyle = "rgba(" + col[0] + ", " + col[1] + ", " + col[2] + ", " + ((scfg.alpha != null ? scfg.alpha : 0.7) * snow).toFixed(3) + ")";
+    ctx.beginPath();
+    for (const d of rainDrops) {
+      const wp = screenToWorld(d.x, d.y);
+      if (cloudShadowAt(wp.x, wp.y) < CLOUD_MIN) continue;
+      ctx.moveTo(d.x + size, d.y); ctx.arc(d.x, d.y, size, 0, Math.PI * 2);
+    }
+    ctx.fill();
+  }
   ctx.restore();
 }
 

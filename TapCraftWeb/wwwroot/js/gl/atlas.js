@@ -26,6 +26,11 @@ function collectSources() {
   const add = (img) => { if (img) { const [w, h] = dim(img); if (w && h) set.add(img); } };
   for (const k of Object.keys(G.images)) add(G.images[k]);
   for (const img of (G.grassVariants || [])) add(img);
+  for (const img of (G.snowVariants || [])) add(img);
+  for (const img of (G.iceVariants || [])) add(img);
+  for (const img of (G.transGrassSnow || [])) add(img);
+  for (const img of (G.transDirtSnow || [])) add(img);
+  for (const img of (G.transGrassDirt || [])) add(img);
   for (const k of Object.keys(G.waterImages)) for (const f of G.waterImages[k]) add(f);
   for (const img of G.stageImages) add(img);
   for (const img of G.treeImages) add(img);

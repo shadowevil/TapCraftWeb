@@ -46,9 +46,14 @@ export function visibleCellBounds() {
   const r0 = Math.floor(minR) - M, r1 = Math.ceil(maxR) + M;
   // Infinite worlds have no edge to clamp against; finite worlds clamp to bounds.
   if (G.world.infinite) return { c0, c1, r0, r1 };
+  // A WRAPPING axis is left unclamped - the floor/entity loops iterate the raw
+  // coordinates (drawing at the raw screen position) while the cell accessors
+  // canonicalize the lookup, giving a seamless loop. The torus globe wraps both axes.
   return {
-    c0: Math.max(0, c0), c1: Math.min(G.world.cols - 1, c1),
-    r0: Math.max(0, r0), r1: Math.min(G.world.rows - 1, r1),
+    c0: G.world.wrapX ? c0 : Math.max(0, c0),
+    c1: G.world.wrapX ? c1 : Math.min(G.world.cols - 1, c1),
+    r0: G.world.wrapY ? r0 : Math.max(0, r0),
+    r1: G.world.wrapY ? r1 : Math.min(G.world.rows - 1, r1),
   };
 }
 

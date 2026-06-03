@@ -166,140 +166,210 @@
 
 <!-- New world / generation -->
 <div id="tc-newworld" class="tc-overlay hidden">
-    <div class="tc-card">
+    <div class="tc-card tc-card-wide">
         <h1>New World</h1>
-        <p class="tc-sub">Generate</p>
 
-        <div class="tc-row">
+        <div class="tc-row tc-newworld-top">
             <div class="tc-row-head"><label for="tc-name">Name</label></div>
             <input id="tc-name" class="tc-text" type="text" maxlength="32" placeholder="World name" />
         </div>
 
-        <div class="tc-row">
-            <label class="tc-check"><input id="tc-infinite" type="checkbox" /> Infinite world (explore forever)</label>
-        </div>
-        <div class="tc-row" id="tc-size-row">
-            <div class="tc-row-head"><label for="tc-size">Map size</label><span id="tc-size-val" class="tc-val"></span></div>
-            <input id="tc-size" class="tc-range" type="range" min="16" max="10000" step="1" value="48" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-land">Land / water</label><span id="tc-land-val" class="tc-val"></span></div>
-            <input id="tc-land" class="tc-range" type="range" min="0" max="100" step="1" value="55" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-growth">Growth rate</label><span id="tc-growth-val" class="tc-val"></span></div>
-            <input id="tc-growth" class="tc-range" type="range" min="0.1" max="10" step="0.1" value="1" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-density">Forest density</label><span id="tc-density-val" class="tc-val"></span></div>
-            <input id="tc-density" class="tc-range" type="range" min="0" max="100" step="1" value="40" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-cluster">Forest clustering</label><span id="tc-cluster-val" class="tc-val"></span></div>
-            <input id="tc-cluster" class="tc-range" type="range" min="0" max="100" step="1" value="60" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-rock-density">Rock density</label><span id="tc-rock-density-val" class="tc-val"></span></div>
-            <input id="tc-rock-density" class="tc-range" type="range" min="0" max="100" step="1" value="40" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-rock-cluster">Rock clustering</label><span id="tc-rock-cluster-val" class="tc-val"></span></div>
-            <input id="tc-rock-cluster" class="tc-range" type="range" min="0" max="100" step="1" value="60" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-mineral">Mineral cluster</label><span id="tc-mineral-val" class="tc-val"></span></div>
-            <input id="tc-mineral" class="tc-range" type="range" min="0" max="100" step="1" value="40" />
+        <div class="tc-tabs">
+            <button class="tc-tab tc-tab-active" type="button" data-tab="world">World</button>
+            <button class="tc-tab" type="button" data-tab="terrain">Terrain</button>
+            <button class="tc-tab" type="button" data-tab="biomes">Biomes</button>
+            <button class="tc-tab" type="button" data-tab="decoration">Decoration</button>
+            <button class="tc-tab" type="button" data-tab="ambient">Ambient &amp; Weather</button>
         </div>
 
-        <p class="tc-sub">Biomes and Decoration</p>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-biome-size">Biome size</label><span id="tc-biome-size-val" class="tc-val"></span></div>
-            <input id="tc-biome-size" class="tc-range" type="range" min="0" max="100" step="1" value="50" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-decor-density">Decoration density</label><span id="tc-decor-density-val" class="tc-val"></span></div>
-            <input id="tc-decor-density" class="tc-range" type="range" min="0" max="100" step="1" value="40" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-decor-cluster">Decoration clustering</label><span id="tc-decor-cluster-val" class="tc-val"></span></div>
-            <input id="tc-decor-cluster" class="tc-range" type="range" min="0" max="100" step="1" value="60" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-weight-meadow">Meadow weight</label><span id="tc-weight-meadow-val" class="tc-val"></span></div>
-            <input id="tc-weight-meadow" class="tc-range" type="range" min="0" max="10" step="1" value="3" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-weight-plains">Plains weight</label><span id="tc-weight-plains-val" class="tc-val"></span></div>
-            <input id="tc-weight-plains" class="tc-range" type="range" min="0" max="10" step="1" value="4" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-weight-dry">Dry scrub weight</label><span id="tc-weight-dry-val" class="tc-val"></span></div>
-            <input id="tc-weight-dry" class="tc-range" type="range" min="0" max="10" step="1" value="2" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-weight-forest">Forest weight</label><span id="tc-weight-forest-val" class="tc-val"></span></div>
-            <input id="tc-weight-forest" class="tc-range" type="range" min="0" max="10" step="1" value="2" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-weight-jungle">Jungle weight</label><span id="tc-weight-jungle-val" class="tc-val"></span></div>
-            <input id="tc-weight-jungle" class="tc-range" type="range" min="0" max="10" step="1" value="1" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-weight-highland">Highland weight</label><span id="tc-weight-highland-val" class="tc-val"></span></div>
-            <input id="tc-weight-highland" class="tc-range" type="range" min="0" max="10" step="1" value="2" />
-        </div>
+        <div class="tc-tabbody">
+            <div class="tc-tabpanel tc-tabpanel-active" data-panel="world">
+                <div class="tc-grid">
+                    <div class="tc-row tc-row-wide">
+                        <div class="tc-row-head"><label for="tc-worldtype">World type</label></div>
+                        <select id="tc-worldtype" class="tc-text">
+                            <option value="globe">Globe - wraps around (default)</option>
+                            <option value="flat">Flat island - finite</option>
+                            <option value="infinite">Infinite - explore forever</option>
+                        </select>
+                        <p class="tc-desc">Globe wraps around in every direction so you loop back; Flat is a finite island; Infinite goes on forever.</p>
+                    </div>
+                    <div class="tc-row" id="tc-circ-row">
+                        <div class="tc-row-head"><label for="tc-circ">Globe circumference</label><span id="tc-circ-val" class="tc-val"></span></div>
+                        <input id="tc-circ" class="tc-range" type="range" min="1000" max="100000" step="100" value="2000" />
+                        <p class="tc-desc">Tiles around the globe before you loop back. Bigger means more land but coarser rivers.</p>
+                    </div>
+                    <div class="tc-row" id="tc-size-row">
+                        <div class="tc-row-head"><label for="tc-size">Map size</label><span id="tc-size-val" class="tc-val"></span></div>
+                        <input id="tc-size" class="tc-range" type="range" min="16" max="10000" step="1" value="48" />
+                        <p class="tc-desc">Width and height of the flat island, in tiles.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-land">Land / water</label><span id="tc-land-val" class="tc-val"></span></div>
+                        <input id="tc-land" class="tc-range" type="range" min="0" max="100" step="1" value="55" />
+                        <p class="tc-desc">Share of the world that is land versus ocean.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-growth">Growth rate</label><span id="tc-growth-val" class="tc-val"></span></div>
+                        <input id="tc-growth" class="tc-range" type="range" min="0.1" max="10" step="0.1" value="1" />
+                        <p class="tc-desc">How fast trees and crops mature.</p>
+                    </div>
+                    <div class="tc-row tc-row-wide">
+                        <div class="tc-row-head"><label for="tc-seed">Seed</label></div>
+                        <div class="tc-seed-row">
+                            <input id="tc-seed" type="number" min="0" step="1" />
+                            <button id="tc-seed-random" class="tc-btn" type="button">Random</button>
+                        </div>
+                        <p class="tc-desc">The same seed and settings always generate the same world.</p>
+                    </div>
+                </div>
+            </div>
 
-        <p class="tc-sub">Ambient and Weather</p>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-bugs">Bugs</label><span id="tc-bugs-val" class="tc-val"></span></div>
-            <input id="tc-bugs" class="tc-range" type="range" min="0" max="40" step="1" value="16" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-birds">Birds</label><span id="tc-birds-val" class="tc-val"></span></div>
-            <input id="tc-birds" class="tc-range" type="range" min="0" max="15" step="1" value="5" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-clouds">Cloud density</label><span id="tc-clouds-val" class="tc-val"></span></div>
-            <input id="tc-clouds" class="tc-range" type="range" min="0" max="40" step="1" value="22" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-weather-freq">Weather change (avg min)</label><span id="tc-weather-freq-val" class="tc-val"></span></div>
-            <input id="tc-weather-freq" class="tc-range" type="range" min="0.5" max="10" step="0.5" value="2.5" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-day-minutes">Day length (min)</label><span id="tc-day-minutes-val" class="tc-val"></span></div>
-            <input id="tc-day-minutes" class="tc-range" type="range" min="4" max="40" step="1" value="10" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-night-minutes">Night length (min)</label><span id="tc-night-minutes-val" class="tc-val"></span></div>
-            <input id="tc-night-minutes" class="tc-range" type="range" min="4" max="40" step="1" value="6" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-rain-intensity">Rain and storm intensity</label><span id="tc-rain-intensity-val" class="tc-val"></span></div>
-            <input id="tc-rain-intensity" class="tc-range" type="range" min="0.3" max="2" step="0.1" value="1" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-weight-clear">Clear weight</label><span id="tc-weight-clear-val" class="tc-val"></span></div>
-            <input id="tc-weight-clear" class="tc-range" type="range" min="0" max="10" step="1" value="6" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-weight-cloudy">Cloudy weight</label><span id="tc-weight-cloudy-val" class="tc-val"></span></div>
-            <input id="tc-weight-cloudy" class="tc-range" type="range" min="0" max="10" step="1" value="3" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-weight-rain">Rain weight</label><span id="tc-weight-rain-val" class="tc-val"></span></div>
-            <input id="tc-weight-rain" class="tc-range" type="range" min="0" max="10" step="1" value="2" />
-        </div>
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-weight-storm">Storm weight</label><span id="tc-weight-storm-val" class="tc-val"></span></div>
-            <input id="tc-weight-storm" class="tc-range" type="range" min="0" max="10" step="1" value="1" />
-        </div>
+            <div class="tc-tabpanel" data-panel="terrain">
+                <div class="tc-grid">
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-density">Forest density</label><span id="tc-density-val" class="tc-val"></span></div>
+                        <input id="tc-density" class="tc-range" type="range" min="0" max="100" step="1" value="40" />
+                        <p class="tc-desc">Overall tree coverage on suitable land.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-cluster">Forest clustering</label><span id="tc-cluster-val" class="tc-val"></span></div>
+                        <input id="tc-cluster" class="tc-range" type="range" min="0" max="100" step="1" value="60" />
+                        <p class="tc-desc">How tightly trees clump into woods versus scattering evenly.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-rock-density">Rock density</label><span id="tc-rock-density-val" class="tc-val"></span></div>
+                        <input id="tc-rock-density" class="tc-range" type="range" min="0" max="100" step="1" value="40" />
+                        <p class="tc-desc">How much rock and ore spawns across the land.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-rock-cluster">Rock clustering</label><span id="tc-rock-cluster-val" class="tc-val"></span></div>
+                        <input id="tc-rock-cluster" class="tc-range" type="range" min="0" max="100" step="1" value="60" />
+                        <p class="tc-desc">How tightly rocks clump into outcrops.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-mineral">Mineral cluster</label><span id="tc-mineral-val" class="tc-val"></span></div>
+                        <input id="tc-mineral" class="tc-range" type="range" min="0" max="100" step="1" value="40" />
+                        <p class="tc-desc">How concentrated iron and gold veins are within rock.</p>
+                    </div>
+                </div>
+            </div>
 
-        <div class="tc-row">
-            <div class="tc-row-head"><label for="tc-seed">Seed</label></div>
-            <div class="tc-seed-row">
-                <input id="tc-seed" type="number" min="0" step="1" />
-                <button id="tc-seed-random" class="tc-btn" type="button">Random</button>
+            <div class="tc-tabpanel" data-panel="biomes">
+                <div class="tc-grid">
+                    <div class="tc-row tc-row-wide">
+                        <div class="tc-row-head"><label for="tc-biome-size">Biome size</label><span id="tc-biome-size-val" class="tc-val"></span></div>
+                        <input id="tc-biome-size" class="tc-range" type="range" min="0" max="100" step="1" value="50" />
+                        <p class="tc-desc">Size of each biome region. Smaller makes a more patchwork world.</p>
+                    </div>
+                    <div class="tc-fieldhead">Biome mix (relative share of land)</div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-weight-meadow">Meadow</label><span id="tc-weight-meadow-val" class="tc-val"></span></div>
+                        <input id="tc-weight-meadow" class="tc-range" type="range" min="0" max="10" step="1" value="3" />
+                        <p class="tc-desc">Flowery open meadow.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-weight-plains">Plains</label><span id="tc-weight-plains-val" class="tc-val"></span></div>
+                        <input id="tc-weight-plains" class="tc-range" type="range" min="0" max="10" step="1" value="4" />
+                        <p class="tc-desc">Open grassy plains with scattered trees.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-weight-dry">Dry scrub</label><span id="tc-weight-dry-val" class="tc-val"></span></div>
+                        <input id="tc-weight-dry" class="tc-range" type="range" min="0" max="10" step="1" value="2" />
+                        <p class="tc-desc">Dry, sparse scrubland.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-weight-forest">Forest</label><span id="tc-weight-forest-val" class="tc-val"></span></div>
+                        <input id="tc-weight-forest" class="tc-range" type="range" min="0" max="10" step="1" value="2" />
+                        <p class="tc-desc">Dense woodland.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-weight-jungle">Jungle</label><span id="tc-weight-jungle-val" class="tc-val"></span></div>
+                        <input id="tc-weight-jungle" class="tc-range" type="range" min="0" max="10" step="1" value="1" />
+                        <p class="tc-desc">Lush, tree-packed jungle.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-weight-highland">Highland</label><span id="tc-weight-highland-val" class="tc-val"></span></div>
+                        <input id="tc-weight-highland" class="tc-range" type="range" min="0" max="10" step="1" value="2" />
+                        <p class="tc-desc">Rocky highland of stone and dirt.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tc-tabpanel" data-panel="decoration">
+                <div class="tc-grid">
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-decor-density">Decoration density</label><span id="tc-decor-density-val" class="tc-val"></span></div>
+                        <input id="tc-decor-density" class="tc-range" type="range" min="0" max="100" step="1" value="40" />
+                        <p class="tc-desc">How many flowers and grass tufts dot the ground.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-decor-cluster">Decoration clustering</label><span id="tc-decor-cluster-val" class="tc-val"></span></div>
+                        <input id="tc-decor-cluster" class="tc-range" type="range" min="0" max="100" step="1" value="60" />
+                        <p class="tc-desc">How tightly decorations group into patches.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tc-tabpanel" data-panel="ambient">
+                <div class="tc-grid">
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-bugs">Bugs</label><span id="tc-bugs-val" class="tc-val"></span></div>
+                        <input id="tc-bugs" class="tc-range" type="range" min="0" max="40" step="1" value="16" />
+                        <p class="tc-desc">Number of crawling land bugs.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-birds">Birds</label><span id="tc-birds-val" class="tc-val"></span></div>
+                        <input id="tc-birds" class="tc-range" type="range" min="0" max="15" step="1" value="5" />
+                        <p class="tc-desc">Number of birds flying overhead.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-clouds">Cloud density</label><span id="tc-clouds-val" class="tc-val"></span></div>
+                        <input id="tc-clouds" class="tc-range" type="range" min="0" max="40" step="1" value="22" />
+                        <p class="tc-desc">How many drifting cloud shadows pass over.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-weather-freq">Weather change</label><span id="tc-weather-freq-val" class="tc-val"></span></div>
+                        <input id="tc-weather-freq" class="tc-range" type="range" min="0.5" max="10" step="0.5" value="2.5" />
+                        <p class="tc-desc">Average minutes between weather changes.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-day-minutes">Day length</label><span id="tc-day-minutes-val" class="tc-val"></span></div>
+                        <input id="tc-day-minutes" class="tc-range" type="range" min="4" max="40" step="1" value="10" />
+                        <p class="tc-desc">Minutes of daylight per cycle.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-night-minutes">Night length</label><span id="tc-night-minutes-val" class="tc-val"></span></div>
+                        <input id="tc-night-minutes" class="tc-range" type="range" min="4" max="40" step="1" value="6" />
+                        <p class="tc-desc">Minutes of night per cycle.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-rain-intensity">Rain and storm intensity</label><span id="tc-rain-intensity-val" class="tc-val"></span></div>
+                        <input id="tc-rain-intensity" class="tc-range" type="range" min="0.3" max="2" step="0.1" value="1" />
+                        <p class="tc-desc">Strength of rain and storms.</p>
+                    </div>
+                    <div class="tc-fieldhead">Weather mix (relative chance)</div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-weight-clear">Clear</label><span id="tc-weight-clear-val" class="tc-val"></span></div>
+                        <input id="tc-weight-clear" class="tc-range" type="range" min="0" max="10" step="1" value="6" />
+                        <p class="tc-desc">Relative chance of clear skies.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-weight-cloudy">Cloudy</label><span id="tc-weight-cloudy-val" class="tc-val"></span></div>
+                        <input id="tc-weight-cloudy" class="tc-range" type="range" min="0" max="10" step="1" value="3" />
+                        <p class="tc-desc">Relative chance of cloudy weather.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-weight-rain">Rain</label><span id="tc-weight-rain-val" class="tc-val"></span></div>
+                        <input id="tc-weight-rain" class="tc-range" type="range" min="0" max="10" step="1" value="2" />
+                        <p class="tc-desc">Relative chance of rain.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-weight-storm">Storm</label><span id="tc-weight-storm-val" class="tc-val"></span></div>
+                        <input id="tc-weight-storm" class="tc-range" type="range" min="0" max="10" step="1" value="1" />
+                        <p class="tc-desc">Relative chance of thunderstorms.</p>
+                    </div>
+                </div>
             </div>
         </div>
 

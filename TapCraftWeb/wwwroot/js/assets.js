@@ -6,7 +6,7 @@ import { G } from "./state.js";
 import { GD } from "./gamedata.js";
 import { hash01, inBounds } from "./rng.js";
 import { MINEABLE_TYPES } from "./mineable.js";
-import { tileAt, grassVariantAt } from "./cells.js";
+import { tileAt, grassVariantAt, snownessAt, iceAt, desertAt } from "./cells.js";
 
 // --- Water autotiling -------------------------------------------------
 export function isLand(col, row) {
@@ -31,17 +31,59 @@ export function waterFrameIndex() {
 // every water cell in a frame), so the floor/mod isn't repeated per cell.
 export function tileSprite(id, col, row, frame) {
   if (id === "water") {
+    if (iceAt(col, row)) {                          // frozen water in the cold (globe) band
+      const iv = G.iceVariants;
+      if (iv && iv.length) return iv[Math.floor(hash01(col, row, (G.world.seed ^ 0x1ce1ce1c) >>> 0) * iv.length) % iv.length] || iv[0];
+    }
     const key = waterEdge(col, row) || "center";
     const frames = G.waterImages[key];
     return frames ? frames[frame] : null;
   }
   // Grass: pick a per-cell variant sprite (biome-biased). Variant 0 is the base
-  // grass.png. tileAt still reports "grass", so placement/spawns are unaffected.
-  if (id === "grass" && G.grassVariants && G.grassVariants.length) {
-    const v = G.grassVariants[grassVariantAt(col, row)] || G.grassVariants[0];
-    return v || G.images.grass || null;
+  // grass.png. tileAt still reports "grass", so placement/spawns are unaffected. On a
+  // globe, a cold cell layers on a snow gradient (grass -> transition tiles -> snow).
+  if (id === "grass") {
+    const sn = snownessAt(col, row);
+    if (sn > 0) { const s = snowTile(G.transGrassSnow, col, row, sn); if (s) return s; }
+    const dz = desertAt(col, row);                  // hot + dry -> sand (reused tile, dithered edge)
+    if (dz > 0 && sandDither(col, row, dz)) return G.images.sand || null;
+    if (G.grassVariants && G.grassVariants.length) {
+      const v = G.grassVariants[grassVariantAt(col, row)] || G.grassVariants[0];
+      return v || G.images.grass || null;
+    }
+    return G.images.grass || null;
+  }
+  // Highland dirt gets the same snow gradient in the cold band (dirt -> ... -> snow).
+  if (id === "dirt") {
+    const sn = snownessAt(col, row);
+    if (sn > 0) { const s = snowTile(G.transDirtSnow, col, row, sn); if (s) return s; }
+    return G.images.dirt || null;
   }
   return G.images[id] || null;
+}
+// Pick a snow-gradient tile by snowiness: base (null -> caller uses the base tile) -> 3
+// transition steps -> full snow. `trans` is the [mostly-snow, half, mostly-base] trio.
+function snowTile(trans, col, row, sn) {
+  const cl = GD.worldgen.climate || {};
+  const dither = (cl.snowDither != null) ? cl.snowDither : 0.25;
+  // Mix the smooth snowiness with per-cell noise so grass / transition / snow INTERMINGLE
+  // into an organic dithered edge instead of clean latitude stripes.
+  const e = sn * (1 - dither) + hash01(col, row, (G.world.seed ^ 0x5a17c01d) >>> 0) * dither;
+  if (e < 0.4) return null;                        // grass (base tile)
+  if (e >= 0.66) {                                  // full snow (random variant)
+    const sv = G.snowVariants;
+    return (sv && sv.length) ? (sv[Math.floor(hash01(col, row, (G.world.seed ^ 0x534e4f57) >>> 0) * sv.length) % sv.length] || sv[0]) : null;
+  }
+  if (!trans || trans.length < 3) return null;      // thin, intermingled transition band
+  const f = (e - 0.4) / 0.26;                        // 0 grassy .. 1 snowy within the band
+  return trans[2 - Math.min(2, Math.floor(f * 3))] || null; // trans[2] mostly grass .. trans[0] mostly snow
+}
+// Desert: dither grass <-> sand by desertness + per-cell noise (no transition art yet, so
+// just an intermingled edge). True where the cell should render as sand.
+function sandDither(col, row, dz) {
+  const cl = GD.worldgen.climate || {};
+  const dither = (cl.desertDither != null) ? cl.desertDither : 0.28;
+  return dz * (1 - dither) + hash01(col, row, (G.world.seed ^ 0xde5e4701) >>> 0) * dither > 0.5;
 }
 export function plantSprite(stage, col, row) {
   if (stage < 0) return null;
@@ -175,6 +217,21 @@ export function loadImages() {
     const img = (G.grassVariants[i] = new Image());
     pending.push(new Promise((res) => { img.onload = res; img.onerror = res; img.src = src; }));
   });
+  // Climate tile variants (globe): snow ground, ice water, and the grass/dirt -> snow
+  // gradient transitions. Same lazy-Image pattern; selected per-cell by snowiness.
+  const loadVariants = (paths, store) => {
+    G[store] = [];
+    (paths || []).forEach((src, i) => {
+      const img = (G[store][i] = new Image());
+      pending.push(new Promise((res) => { img.onload = res; img.onerror = res; img.src = src; }));
+    });
+  };
+  loadVariants(GD.worldgen.snow && GD.worldgen.snow.variants, "snowVariants");
+  loadVariants(GD.worldgen.ice && GD.worldgen.ice.variants, "iceVariants");
+  const trans = GD.worldgen.transitions || {};
+  loadVariants(trans.grassSnow, "transGrassSnow");
+  loadVariants(trans.dirtSnow, "transDirtSnow");
+  loadVariants(trans.grassDirt, "transGrassDirt");
   // Cosmetic ground-cover decoration sprites (flowers / grass patches), drawn as
   // objects (lifted sprite + cast shadow) in the entity pass.
   const decorSprites = (GD.worldgen.decor && GD.worldgen.decor.sprites) || [];

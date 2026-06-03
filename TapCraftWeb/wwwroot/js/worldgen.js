@@ -14,9 +14,29 @@ import { updateCraftedHud } from "./crafting.js";
 
 // --- Generation -------------------------------------------------------
 export function generate(cols, rows, seed, settings) {
-  G.world.infinite = !!(settings && settings.infinite);
-  G.world.cols = G.world.infinite ? 0 : cols; // 0 = unbounded sentinel
-  G.world.rows = G.world.infinite ? 0 : rows;
+  const st = settings || {};
+  // World TYPE: "globe" (cylindrical - wraps east-west, real poles), "infinite"
+  // (endless per-cell), or "flat" (finite, non-wrapping island/map). Old saves
+  // predate worldType, so derive it from the legacy `infinite` flag to keep their
+  // exact shape. The globe is the default for brand-new worlds (set by createWorld).
+  const worldType = st.worldType || (st.infinite ? "infinite" : "flat");
+  G.world.infinite = (worldType === "infinite");
+  // Globe is a TORUS: both axes wrap, so it loops in every direction (no edges, no poles).
+  G.world.wrapX = (worldType === "globe");
+  G.world.wrapY = (worldType === "globe");
+  if (worldType === "globe") {
+    // Globe size is a CIRCUMFERENCE (tiles around the world); height = half the
+    // width (equirectangular 2:1). It sets how many continents fit + the loop
+    // distance, and is the single number the size slider drives.
+    const sc = (GD.sliders && GD.sliders.circumference) || { min: 1000, max: 100000, default: 2000 };
+    let w = st.circumference | 0; if (!w) w = sc.default;
+    w = Math.max(sc.min, Math.min(sc.max, w));
+    G.world.cols = w;
+    G.world.rows = Math.max(2, Math.round(w / 2));
+  } else {
+    G.world.cols = G.world.infinite ? 0 : cols; // 0 = unbounded sentinel
+    G.world.rows = G.world.infinite ? 0 : rows;
+  }
   G.world.seed = seed >>> 0;
   G.world.settings = { ...settings };
   G.world.tick = 0;

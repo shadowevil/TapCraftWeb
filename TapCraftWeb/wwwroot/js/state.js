@@ -18,6 +18,9 @@ export const G = {
     // Terrain is generated per-cell on demand from the seed (see cells.js); only
     // MODIFIED cells are stored here, so worlds can be arbitrarily large / infinite.
     infinite: false,     // true = unbounded world (no cols/rows edge); false = finite cols x rows
+    wrapX: false,        // true = columns wrap (east-west). Globe/torus.
+    wrapY: false,        // true = rows wrap (north-south). Globe is a TORUS: wrapX && wrapY (loops every direction)
+    hydro: null,         // globe hydrology overlay (rivers/lakes), built at creation (cells.js); null otherwise
     mods: new Map(),     // "c,r" -> { t?, st?, pr?, ch?, rk? } delta fields
     landThreshold: 0,    // elevation cutoff for land/water (sampled at creation)
     spawn: { c: 0, r: 0 }, // initial camera-center land cell
@@ -47,6 +50,8 @@ export const G = {
   oreImages: {},          // mineable typeId -> [variant Images] (rock/iron_vein/gold_vein)
 
   cam: { x: 0, y: 0, zoom: 2 },
+  viewSnow: 0,                // 0..1 how snowy the current view is (smoothed); fades birds/ambience -> wind + rain -> snow near the frozen biome (globe)
+  viewDesert: 0,              // 0..1 how desert the current view is (smoothed); thins rainfall in the hot/dry biome (globe)
   camRestored: false,         // true when loadWorld restored a saved camera (skip fit/spawn)
   pendingPanels: null,        // saved craft/build panel layout from loadWorld, applied in startGame
   running: false,

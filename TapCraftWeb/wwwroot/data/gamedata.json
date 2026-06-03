@@ -1,5 +1,5 @@
 {
-  "version": 51,
+  "version": 67,
 
   "tiles": {
     "grass": { "src": "assets/tiles/grass.png" },
@@ -45,7 +45,8 @@
       "matureSprites": [
         "assets/objects/tree_1.png",
         "assets/objects/tree_2.png"
-      ]
+      ],
+      "yOffset": 8
     },
     "rock": {
       "targetable": true,
@@ -55,8 +56,12 @@
       "placeableOn": { "tile": "grass", "requireInterior": false },
       "variantSprites": [
         "assets/objects/rock_1.png",
-        "assets/objects/rock_2.png"
-      ]
+        "assets/objects/rock_2.png",
+        "assets/objects/rock_small_1.png",
+        "assets/objects/rock_small_2.png"
+      ],
+      "variantYOffset": { "2": 12, "3": 14 },
+      "yOffset": 10
     },
     "iron_vein": {
       "targetable": true,
@@ -67,7 +72,8 @@
       "placeableOn": { "tile": "grass", "requireInterior": false },
       "variantSprites": [
         "assets/objects/iron_ore_vein_1.png"
-      ]
+      ],
+      "yOffset": 8
     },
     "gold_vein": {
       "targetable": true,
@@ -78,7 +84,8 @@
       "placeableOn": { "tile": "grass", "requireInterior": false },
       "variantSprites": [
         "assets/objects/gold_ore_vein_1.png"
-      ]
+      ],
+      "yOffset": 8
     }
   },
 
@@ -251,16 +258,51 @@
       "thresholdDensityFactor": 0.30,
       "types": ["iron_vein", "gold_vein"]
     },
+    "rockZones": {
+      "mountainShare": 0.4,
+      "mountainRockMul": 2.2,
+      "highlandRockMul": 1.3,
+      "fieldstoneMul": 0.15,
+      "oasisRockMul": 0.6,
+      "mountainOreMul": 1.7,
+      "highlandOreMul": 0.7,
+      "_note": "genVersion>=3: rock + ore live on ROCKY ground. mountainShare = top fraction of the HIGHLAND that becomes a solid-stone PEAK (vs foothill). *RockMul/*OreMul scale the rock/ore fill per zone (x the rockDensity/mineral sliders): mountain peaks + foothills get the BIG rock boulders (variants 0-1) + ore, while open GROUND (grass + sand) and a desert oasis get gentle small-rock FIELDSTONE (variants 2-3 = rock_small_*, no ore). Open desert is barren. Older worlds (genVersion<3) keep the legacy grass scatter."
+    },
 
-    "genVersion": 2,
+    "genVersion": 3,
     "heightSpan": 0.35,
     "grass": {
       "variants": ["assets/tiles/grass.png", "assets/tiles/grass_b1.png", "assets/tiles/grass_b2.png", "assets/tiles/grass_b3.png"]
     },
+    "snow": { "variants": ["assets/tiles/snow_1.png", "assets/tiles/snow_2.png", "assets/tiles/snow_3.png"] },
+    "ice": { "variants": ["assets/tiles/ice_1.png", "assets/tiles/ice_2.png"] },
+    "transitions": {
+      "grassSnow": ["assets/tiles/grass_snow_1.png", "assets/tiles/grass_snow_2.png", "assets/tiles/grass_snow_3.png"],
+      "dirtSnow": ["assets/tiles/dirt_snow_1.png", "assets/tiles/dirt_snow_2.png", "assets/tiles/dirt_snow_3.png"],
+      "grassDirt": ["assets/tiles/grass_dirt_1.png", "assets/tiles/grass_dirt_2.png", "assets/tiles/grass_dirt_3.png"],
+      "_note": "gradient blends: index 0 = mostly the SECOND type (snow/dirt), index 2 = mostly the first (grass/dirt). Selected by a smooth blend value, not directional autotiling"
+    },
+    "climate": {
+      "noiseScale": 0.004, "noiseAmp": 0.16,
+      "snowTemp": 0.34, "snowFull": 0.1, "iceTemp": 0.2,
+      "tundraTemp": 0.1, "taigaTemp": 0.34,
+      "snowDither": 0.25, "sandSnow": 0.28,
+      "hotTemp": 0.55, "hotFull": 0.9, "dryMoist": 0.55, "wetBand": 0.35, "desertDither": 0.3,
+      "desertForestCut": 0.9, "desertRockCut": 0.55, "desertRainCut": 0.8, "desertDry": 0.4, "oasisChance": 0.1,
+      "_note": "globe LATITUDE climate: a LINEAR (triangle) gradient row->temperature, so transitions are even + WIDE - cold/snow at the row-wrap seam (poles), hot/desert at the mid rows (equator), a lush temperate grass belt between; spawn at ~1/4 latitude (temperate). Each region is a temperature RANGE with a wide DITHERED transition (snowDither/desertDither sprinkle the tiles, no hard line). snowFull..snowTemp = snow band; water freezes below iceTemp; no beaches above sandSnow; forest fades taigaTemp->tundraTemp. hotTemp..hotFull = grass->desert ramp (temperature-led; moisture only TEMPERS via dryMoist/wetBand so very-moist hot land stays green). desert cuts foliage/rocks/rain; desertDry + oasisChance drive the desert hydrology (no streams, basins filled bar a rare oasis)"
+    },
     "continent": { "scale": 0.011, "amp": 0.16, "_note": "low-freq elevation term; genVersion>=2 + non-falloff worlds only" },
+    "globe": {
+      "contScale": 0.007, "detailMix": 0.28, "sharpen": 2.6, "warp": 18,
+      "baseScale": 0.045, "warpScale": 0.08, "moistScaleMul": 1.3, "uplandScaleMul": 1.6,
+      "channelThreshold": 60, "riverWidthScale": 0.16, "minRiverWidth": 2, "maxRiverWidth": 5,
+      "pondMinTiles": 4, "lakeMinTiles": 35, "oceanMinTiles": 2500, "poleCold": 0.55, "hydroMax": 512,
+      "_note": "torus (globe) world tuning, sampled on two circles for a seamless wrap in both axes. hydroMax = coarse hydrology grid width (gen cost ~constant regardless of world size). channelThreshold = min drainage to be a channel; width grows with sqrt(drainage)*riverWidthScale (stream 1-2 wide, river 3+). lakeMinTiles/oceanMinTiles classify connected water bodies (smaller = filled in). poleCold used by climate (phase 3)"
+    },
     "decor": {
       "fieldScale": 0.16,
-      "lift": 16,
+      "yOffset": 16,
+      "spriteYOffset": { "0": 12, "2": 14, "6": 12 },
       "sprites": [
         "assets/objects/grass_flower_1.png",
         "assets/objects/grass_flower_2.png",
@@ -270,7 +312,7 @@
         "assets/objects/grass_patch_1.png",
         "assets/objects/grass_patch_2.png"
       ],
-      "_note": "cosmetic ground-cover objects on bare grass; all worlds"
+      "_note": "cosmetic ground-cover objects on bare grass (all worlds). yOffset = default sprite render lift; spriteYOffset = per-sprite override keyed by INDEX into sprites[] (e.g. grass_flower_3 = idx 2 = 14)"
     },
     "terrain": {
       "beachHeight": 0.08,
@@ -291,11 +333,11 @@
       "_note": "smooth low-octave heatmap fields -> coherent biome regions; octaves low = smooth, scale low = larger. highlandElevWeight blends upland field with real height (0=pure regions, 1=terrain-following)",
       "list": [
         { "id": "highland", "elevation": true, "tileHigh": "stone", "tileLow": "dirt", "stoneCore": 0.4 },
-        { "id": "dry",    "grass": [0, 3], "grassWeights": [0.55, 0.45], "forestMul": 0.25, "decorMul": 0.4,  "decorSprites": [5, 6] },
-        { "id": "plains", "grass": [0, 1], "grassWeights": [0.6, 0.4],  "forestMul": 0.85, "decorMul": 0.9,  "decorSprites": [0, 5, 6] },
-        { "id": "meadow", "grass": [2, 1], "grassWeights": [0.6, 0.4],   "forestMul": 1.3, "decorMul": 1.6, "decorSprites": [0, 1, 2, 3, 4] },
-        { "id": "forest", "grass": [2, 1], "grassWeights": [0.65, 0.35], "forestMul": 1.8, "decorMul": 1.4, "decorSprites": [1, 2, 5, 6] },
-        { "id": "jungle", "grass": [2, 1], "grassWeights": [0.7, 0.3],   "forestMul": 2.3, "decorMul": 2.0, "decorSprites": [0, 1, 2, 3, 4, 5, 6] }
+        { "id": "dry",    "grass": [0, 3], "grassWeights": [0.55, 0.45], "forestMul": 0.21, "decorMul": 0.4,  "decorSprites": [5, 6] },
+        { "id": "plains", "grass": [0, 1], "grassWeights": [0.6, 0.4],  "forestMul": 0.71, "decorMul": 0.9,  "decorSprites": [0, 5, 6] },
+        { "id": "meadow", "grass": [2, 1], "grassWeights": [0.6, 0.4],   "forestMul": 0.58, "decorMul": 1.0, "decorSprites": [0, 1, 2, 3, 4] },
+        { "id": "forest", "grass": [2, 1], "grassWeights": [0.65, 0.35], "forestMul": 1.5, "decorMul": 1.4, "decorSprites": [1, 2, 5, 6] },
+        { "id": "jungle", "grass": [2, 1], "grassWeights": [0.7, 0.3],   "forestMul": 1.92, "decorMul": 1.0, "decorSprites": [0, 1, 2, 3, 4, 5, 6] }
       ],
       "_orderNote": "moisture biomes classified in THIS list order, dry (driest) -> jungle (wettest); highland is elevation-gated and excluded. grass/decorSprites index into worldgen.grass.variants / worldgen.decor.sprites; weights come from settings.biomeWeights"
     }
@@ -330,7 +372,9 @@
     "rain": {
       "color": [165, 190, 230], "alpha": 0.28, "drops": 880, "speed": 1500, "slant": -0.22, "length": 20,
       "splashRate": 52, "splashMs": 430, "splashColor": [205, 225, 250]
-    }
+    },
+    "snow": { "color": [236, 243, 255], "alpha": 0.7, "size": 1.7, "drift": 34, "fallMul": 0.42, "splashMul": 0.12, "noLightningView": 0.5,
+      "_note": "globe: when the VIEW is snowy (G.viewSnow), rain renders as drifting snow instead (fallMul slows it, drift sways it), splashes fade out (splashMul), and lightning is suppressed above noLightningView - storms become snowstorms" }
   },
 
   "daynight": {
@@ -366,6 +410,7 @@
 
   "sliders": {
     "size":        { "min": 16,  "max": 10000, "step": 1, "default": 48 },
+    "circumference": { "min": 1000, "max": 100000, "step": 100, "default": 2000 },
     "land":        { "min": 0,   "max": 100, "step": 1,   "default": 55 },
     "growth":      { "min": 0.1, "max": 10,  "step": 0.1, "default": 1  },
     "density":     { "min": 0,   "max": 100, "step": 1,   "default": 40 },
