@@ -168,16 +168,19 @@ function bestInStock(stockMap, kind) {
   return best;
 }
 // Worker count = base + 1 per maxTargetPerTools tools currently in the hut.
-export function effectiveMaxTargets(b) {
+// Pass `tc` (precomputed hutToolCount) to avoid re-sweeping the tool slots.
+export function effectiveMaxTargets(b, tc) {
   const def = GD.buildings[b.type];
   const per = def.maxTargetPerTools | 0;
-  const bonus = per > 0 ? Math.floor(hutToolCount(b) / per) : 0;
+  const count = tc === undefined ? hutToolCount(b) : tc;
+  const bonus = per > 0 ? Math.floor(count / per) : 0;
   return (def.maxTargets | 0) + bonus;
 }
 // Harvest interval after the per-tool speed bonus (clamped to maxSpeedBonus).
-export function effectiveSpeedMs(b) {
+export function effectiveSpeedMs(b, tc) {
   const def = GD.buildings[b.type];
-  const bonus = Math.min(def.maxSpeedBonus || 0, hutToolCount(b) * (def.speedBonusPerTool || 0));
+  const count = tc === undefined ? hutToolCount(b) : tc;
+  const bonus = Math.min(def.maxSpeedBonus || 0, count * (def.speedBonusPerTool || 0));
   return def.harvestSpeedMs * (1 - bonus);
 }
 
@@ -328,9 +331,17 @@ export function updateBuildings(dtMs) {
 function updateHarvester(b, now) {
   const def = GD.buildings[b.type];
   const w = workState(b);
-  if (hutToolCount(b) <= 0) { w.workers.length = 0; return; } // idle: no tools
-  syncWorkers(w, effectiveMaxTargets(b));
-  const speedMs = effectiveSpeedMs(b);
+  const tc = hutToolCount(b);                  // one tool-slot sweep, reused below
+  if (tc <= 0) { w.workers.length = 0; return; } // idle: no tools
+  syncWorkers(w, effectiveMaxTargets(b, tc));
+  const speedMs = effectiveSpeedMs(b, tc);
+  // Skip the radius-wide eligibility scan + sort when NO worker can act this tick.
+  // Workers swing once per speedMs (~1s+), so on most 50ms ticks every worker is
+  // still on cooldown and buildingTargets() would be built (and sorted) just to be
+  // thrown away. This is the dominant per-tick cost for a map full of huts.
+  let anyReady = false;
+  for (let i = 0; i < w.workers.length; i++) { if (now >= w.workers[i].nextAt) { anyReady = true; break; } }
+  if (!anyReady) return;
   const targets = buildingTargets(b);
   const claimed = new Set();
   let idx = 0;

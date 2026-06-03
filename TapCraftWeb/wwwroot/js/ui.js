@@ -18,7 +18,7 @@ import { resizeGL } from "./gl/glrender.js";
 import { fitView, buildingAnchor, centerCameraOn, minZoom, visibleCellBounds } from "./iso.js";
 import { generate } from "./worldgen.js";
 import {
-  readWorldsIndex, saveWorld, loadWorld, deleteWorld, newWorldId, applyPanels,
+  readWorldsIndex, saveWorld, saveWorldNow, loadWorld, deleteWorld, newWorldId, applyPanels,
 } from "./persistence.js";
 import { setRunning, updatePlayPause } from "./sim.js";
 import { buildCraftPanel, toggleCraftPanel } from "./crafting.js";
@@ -34,10 +34,26 @@ import {
   playSfx, getAudioSettings, setChannelVolume, setChannelMute, setWorldAudioPaused,
 } from "./sound.js";
 
+// The counter elements are static (built once from Index.cshtml) and this runs on
+// every harvest tick, craft, and deposit. Cache the element refs (avoids a
+// getElementById per resource per call) and the last value written (skips the DOM
+// write when a counter is unchanged - this function only ever writes these nodes,
+// so the cache stays in sync with what's on screen across world switches).
+let resCountEls = null, resKinds = null;
+const resLastShown = {};
 export function updateResourceUI() {
-  for (const kind of Object.keys(GD.resources)) {
-    const elCount = resourceCountEl(kind);
-    if (elCount) elCount.textContent = G.world[kind] | 0;
+  if (!resCountEls) {
+    resCountEls = {};
+    resKinds = Object.keys(GD.resources);
+    for (const kind of resKinds) resCountEls[kind] = resourceCountEl(kind);
+  }
+  for (const kind of resKinds) {
+    const elCount = resCountEls[kind];
+    if (!elCount) continue;
+    const v = G.world[kind] | 0;
+    if (resLastShown[kind] === v) continue;
+    resLastShown[kind] = v;
+    elCount.textContent = v;
   }
 }
 
@@ -141,7 +157,7 @@ export function fitMenu() {
 }
 
 export function showMainMenu() {
-  if (G.world.id) saveWorld();        // persist the real world before leaving it
+  if (G.world.id) saveWorldNow();     // sync: persist the real world before the menu preview replaces it
   G.inMenu = true;
   G.running = true;                   // animate the background island
   setWorldAudioPaused(false);         // menu preview runs -> world/ambient audio audible
@@ -438,7 +454,7 @@ export function wireUi() {
   });
   el("tc-options").addEventListener("click", openOptions);
   el("tc-options-back").addEventListener("click", closeOptions);
-  el("tc-save").addEventListener("click", () => { saveWorld(); flashSaved(); });
+  el("tc-save").addEventListener("click", () => { saveWorldNow(); flashSaved(); }); // explicit: write now so "Saved" is truthful
   el("tc-mainmenu").addEventListener("click", () => { menuModal.classList.add("hidden"); showMainMenu(); });
 
   buildCraftPanel();
@@ -568,8 +584,29 @@ export function toggleBuildPanel() {
 // Live affordability refresh, mirroring how the craft panel re-runs updateCraftPanel
 // each frame while open: entries brighten (lose tc-unaffordable) the moment you can
 // afford them. Called per frame from render.js; cheap (a handful of buildings).
+// Affordability only changes when a build-cost resource changes (or the panel is
+// rebuilt, which force-marks via markAffordability directly). Gate the per-frame
+// re-mark on an actual change so an open build panel isn't re-scanned every frame.
+let affordKinds = null, affordLast = null;
+function affordabilityChanged() {
+  if (!affordKinds) {
+    const set = new Set();
+    for (const id of Object.keys(GD.buildings)) {
+      for (const k of Object.keys(GD.buildings[id].buildCost || {})) set.add(k);
+    }
+    affordKinds = Array.from(set);
+    affordLast = {};
+  }
+  let changed = false;
+  for (const k of affordKinds) {
+    const v = G.world[k] | 0;
+    if (affordLast[k] !== v) { affordLast[k] = v; changed = true; }
+  }
+  return changed;
+}
 export function updateBuildPanel() {
   if (buildPanel.classList.contains("hidden")) return;
+  if (!affordabilityChanged()) return;
   markAffordability();
 }
 

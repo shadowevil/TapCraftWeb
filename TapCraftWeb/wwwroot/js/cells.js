@@ -15,7 +15,7 @@
 
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
-import { hash01, makeFbm, makeFbm4, inBounds } from "./rng.js";
+import { hash01, makeFbm, makeFbm4, inBounds, growthStep } from "./rng.js";
 import { encodeMineable, mineableTypeIndex } from "./mineable.js";
 
 // --- Terrain tuning (engine constants, ported from worldgen.generateTerrain) --
@@ -59,19 +59,40 @@ function sCurve(e, p) {
 // cells many times (hit-test, tile pass, entity pass, neighbor checks), and the
 // viewport repeats across frames, so we memoize results. Cleared on world change;
 // bounded so an infinite world's cache can't grow without limit.
-let baseCache = new Map();
+// Cache layout: per-tag NESTED maps (tag -> Map<col, Map<row, value>>). The old
+// design built a fresh "tag c,r" STRING key on every probe - the single largest
+// source of garbage + string-hashing in the engine, since the base samplers are
+// re-read many times per visible cell per frame. Nested integer-keyed maps remove
+// the string entirely (and handle unbounded / negative coords on infinite worlds,
+// which a packed numeric key could not). baseCacheCount tracks total entries for
+// the bounded-size eviction (a tag is a short interned literal, so baseCache[tag]
+// property access is fast).
+let baseCache = Object.create(null);
+let baseCacheCount = 0;
 const BASE_CACHE_CAP = 400000; // headroom: terrain enrichment adds memo tags (e/m/d/h)
 function memo(tag, c, r, fn) {
   // Torus: a cell and its wrapped copies share one entry (canonicalize both axes).
   if (gen.wrapX) { c %= gen.cols; if (c < 0) c += gen.cols; }
   if (gen.wrapY) { r %= gen.rows; if (r < 0) r += gen.rows; }
-  const k = tag + c + "," + r;
-  let v = baseCache.get(k);
-  if (v === undefined) {
-    v = fn(c, r);
-    if (baseCache.size > BASE_CACHE_CAP) baseCache.clear();
-    baseCache.set(k, v);
+  // Fast path: cache hit (samplers never return undefined, so undefined == miss).
+  const cm = baseCache[tag];
+  if (cm !== undefined) {
+    const rm = cm.get(c);
+    if (rm !== undefined) {
+      const hit = rm.get(r);
+      if (hit !== undefined) return hit;
+    }
   }
+  // Miss: compute, then re-fetch the maps before storing (fn can recurse into memo
+  // and an eviction may have wiped the cache mid-call) so we never write a stale ref.
+  const v = fn(c, r);
+  if (baseCacheCount > BASE_CACHE_CAP) { for (const k in baseCache) baseCache[k].clear(); baseCacheCount = 0; }
+  let cm2 = baseCache[tag];
+  if (cm2 === undefined) cm2 = baseCache[tag] = new Map();
+  let rm2 = cm2.get(c);
+  if (rm2 === undefined) { rm2 = new Map(); cm2.set(c, rm2); }
+  rm2.set(r, v);
+  baseCacheCount++;
   return v;
 }
 
@@ -196,7 +217,7 @@ export function initWorldGen(seed, settings) {
     decorPickSeed: (s ^ 0x91b7e4d5) >>> 0,
   };
   if (wrapX) setupGlobeGen(s);
-  baseCache.clear();
+  baseCache = Object.create(null); baseCacheCount = 0; // reset the per-tag memo cache for the new world
   G.world.hydro = null; // cleared for non-globe; rebuilt below for globe worlds
   G.world.landThreshold = sampleThreshold(st.landFraction != null ? st.landFraction : 0.55);
   sampleBiomeThresholds(); // highland elevation cutoff + dry/plains/meadow moisture cuts
@@ -1034,17 +1055,54 @@ export function hydroClassAt(c, r) {
 }
 
 // --- Delta overlay -----------------------------------------------------------
-// G.world.mods : Map<"c,r", { t?, st?, pr?, ch?, rk? }> (only changed fields).
-// Keys are coordinate STRINGS so they work unbounded / with negative coords
-// (infinite worlds), not just within a fixed cols*rows grid.
-// Globe: edits are keyed by CANONICAL coordinate so a change shows on every wrapped
-// copy and is stored once (wrapCol/wrapRow are no-ops on non-globe worlds).
-function entryAt(c, r) { return G.world.mods.get(wrapCol(c) + "," + wrapRow(r)); }
+// G.world.mods is a NESTED map (Map<col, Map<row, entry>>) keyed by integers, so a
+// cell lookup builds no string (the old "c,r" key was allocated on every accessor
+// call - tileAt/stageAt/... run per visible cell per frame). Nested maps also handle
+// the unbounded/negative coords of infinite worlds, which a packed numeric key can't.
+// Globe edits are keyed by CANONICAL coord (wrapCol/wrapRow), so one edit shows on
+// every wrapped copy and is stored once. The save format stays the flat "c,r" array
+// (see modsToEntries/modsFromEntries) for backward/forward compatibility.
+function entryAt(c, r) {
+  const m = G.world.mods;
+  if (m.size === 0) return undefined;            // no columns edited yet
+  const cm = m.get(wrapCol(c));
+  return cm === undefined ? undefined : cm.get(wrapRow(r));
+}
 function ensureEntry(c, r) {
-  const k = wrapCol(c) + "," + wrapRow(r);
-  let e = G.world.mods.get(k);
-  if (!e) { e = {}; G.world.mods.set(k, e); }
+  const m = G.world.mods, col = wrapCol(c), row = wrapRow(r);
+  let cm = m.get(col);
+  if (cm === undefined) { cm = new Map(); m.set(col, cm); }
+  let e = cm.get(row);
+  if (e === undefined) { e = {}; cm.set(row, e); }
   return e;
+}
+
+// --- Delta-overlay helpers (used by persistence.js + the debug overlay) -------
+export function createMods() { return new Map(); }                 // empty nested overlay
+export function modsSize(m) { let n = 0; for (const cm of m.values()) n += cm.size; return n; }
+function modsSetRaw(m, c, r, e) {                                   // c,r already canonical/raw
+  let cm = m.get(c);
+  if (cm === undefined) { cm = new Map(); m.set(c, cm); }
+  cm.set(r, e);
+}
+export function modsSetCell(m, c, r, e) { modsSetRaw(m, c, r, e); } // legacy-array migration
+// Flatten to the on-disk save shape: [["c,r", entry], ...] (unchanged across versions).
+export function modsToEntries(m) {
+  const out = [];
+  for (const [c, cm] of m) for (const [r, e] of cm) out.push([c + "," + r, e]);
+  return out;
+}
+// Rebuild the nested overlay from a saved [["c,r", entry], ...] array.
+export function modsFromEntries(arr) {
+  const m = new Map();
+  if (Array.isArray(arr)) {
+    for (const pair of arr) {
+      const k = pair[0], e = pair[1];
+      const ci = ("" + k).indexOf(",");
+      modsSetRaw(m, +k.slice(0, ci), +k.slice(ci + 1), e);
+    }
+  }
+  return m;
 }
 
 // Clamp a cell-range box to the world. Finite worlds clamp to [0,cols/rows-1];
@@ -1069,10 +1127,41 @@ export function chopAt(c, r) { const e = entryAt(c, r); return (e && e.ch !== un
 export function rockRawAt(c, r) { const e = entryAt(c, r); return (e && e.rk !== undefined) ? e.rk : baseRockRawAt(c, r); }
 
 // Diagnostics for the debug overlay.
-export function baseCacheSize() { return baseCache.size; }
+export function baseCacheSize() { return baseCacheCount; }
 
 export function setTile(c, r, v) { ensureEntry(c, r).t = v; }
 export function setStage(c, r, v) { ensureEntry(c, r).st = v; }
 export function setProgress(c, r, v) { ensureEntry(c, r).pr = v; }
 export function setChop(c, r, v) { ensureEntry(c, r).ch = v; }
 export function setRockRaw(c, r, v) { ensureEntry(c, r).rk = v; }
+
+// Growth-tick fast path. The sim's growthTick used to call stageAt + progressAt +
+// setStage + setProgress per cell - four keyed Map lookups (each building a "c,r"
+// string) for the same cell, 20x/sec across the whole priority disc + every
+// building radius. This folds them into ONE entry lookup (and one set only when
+// the cell actually grows): read stage/progress (override or baseline), bail if
+// non-growable, advance, write both fields back into the same entry object.
+// `gainMul` is the precomputed gain for AMORTIZED bands; EXACT bands derive their
+// gain from growthStep here. Semantics are identical to the old grow() closure.
+export function growCell(c, r, mature, stageFull, gainMul, exact, t, seed, g) {
+  const mods = G.world.mods, col = wrapCol(c), row = wrapRow(r);
+  let cm, e;
+  if (mods.size > 0) { cm = mods.get(col); if (cm !== undefined) e = cm.get(row); }
+  const st = (e && e.st !== undefined) ? e.st : baseStageAt(c, r);
+  if (st < 0 || st >= mature) return;
+  const gain = exact ? growthStep(c, r, t, seed) : gainMul;
+  if (gain <= 0) return;
+  let pr = ((e && e.pr !== undefined) ? e.pr : baseProgressAt(c, r)) + gain * g;
+  let stage = st;
+  if (exact) {
+    if (pr >= stageFull) { stage = st + 1; pr = 0; }
+  } else {
+    while (pr >= stageFull && stage < mature) { stage++; pr -= stageFull; }
+    if (stage >= mature) { stage = mature; pr = 0; }
+  }
+  if (!e) {
+    if (cm === undefined) { cm = new Map(); mods.set(col, cm); }
+    e = {}; cm.set(row, e);
+  }
+  e.st = stage; e.pr = pr;
+}

@@ -27,7 +27,8 @@ import { uvFor } from "./atlas.js";
 const FLOATS_PER = 14;            // a,b,c,d, e,f, u0,v0,u1,v1, r,g,b,alpha
 let gl = null, glCanvas = null;
 let prog = null, tintProg = null;
-let uResLoc = null, uTexLoc = null, uTintColLoc = null;
+let uResLoc = null, uCamLoc = null, uTexLoc = null, uTintColLoc = null;
+let floorCamX = 0, floorCamY = 0; // camera offset applied to the world-space floor layer at draw
 let dummyVao = null, quadBuf = null, tex = null;
 let resW = 1, resH = 1;
 let ready = false;
@@ -45,11 +46,15 @@ layout(location=2) in vec2 a_x1;
 layout(location=3) in vec4 a_uv;
 layout(location=4) in vec4 a_col;
 uniform vec2 u_res;
+uniform vec2 u_cam; // added to every instance position: lets the cached FLOOR be emitted in
+                    // world-screen space (camera-independent) and panned via this uniform alone,
+                    // so a pan needs no floor re-emit. The dynamic layer emits in screen space
+                    // (camera already baked in) and draws with u_cam = (0,0).
 out vec2 v_uv;
 out vec4 v_col;
 void main() {
-  float sx = a_x0.x * a_quad.x + a_x0.z * a_quad.y + a_x1.x;
-  float sy = a_x0.y * a_quad.x + a_x0.w * a_quad.y + a_x1.y;
+  float sx = a_x0.x * a_quad.x + a_x0.z * a_quad.y + a_x1.x + u_cam.x;
+  float sy = a_x0.y * a_quad.x + a_x0.w * a_quad.y + a_x1.y + u_cam.y;
   gl_Position = vec4(sx / u_res.x * 2.0 - 1.0, 1.0 - sy / u_res.y * 2.0, 0.0, 1.0);
   v_uv = mix(a_uv.xy, a_uv.zw, a_quad);
   v_col = a_col;
@@ -118,6 +123,7 @@ function buildPipeline() {
   tintProg = link(TINT_VS, TINT_FS);
   if (!prog || !tintProg) return false;
   uResLoc = gl.getUniformLocation(prog, "u_res");
+  uCamLoc = gl.getUniformLocation(prog, "u_cam");
   uTexLoc = gl.getUniformLocation(prog, "u_tex");
   uTintColLoc = gl.getUniformLocation(tintProg, "u_color");
   dummyVao = gl.createVertexArray();
@@ -228,10 +234,11 @@ export function endFloor() {
   gl.bufferData(gl.ARRAY_BUFFER, flr.data.subarray(0, flr.count * FLOATS_PER), gl.DYNAMIC_DRAW);
   cur = dyn;
 }
-function drawLayer(layer) {
+function drawLayer(layer, camX, camY) {
   if (!ready || layer.count === 0) return;
   gl.useProgram(prog);
   gl.uniform2f(uResLoc, resW, resH);
+  gl.uniform2f(uCamLoc, camX, camY);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, tex);
   gl.uniform1i(uTexLoc, 0);
@@ -240,7 +247,10 @@ function drawLayer(layer) {
   gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, layer.count);
   gl.bindVertexArray(null);
 }
-export function drawFloor() { drawLayer(flr); } // cached floor buffer (uploaded in endFloor)
+// Camera offset for the world-space floor layer, set by render.js each frame; the
+// floor instances carry no camera so a pan only updates this (no re-emit).
+export function setFloorCam(x, y) { floorCamX = x; floorCamY = y; }
+export function drawFloor() { drawLayer(flr, floorCamX, floorCamY); } // cached floor buffer (uploaded in endFloor)
 // Animate water without rebuilding the whole floor: render.js records each water tile's
 // instance index during the floor build, then each water tick rewrites just those UVs (in
 // place, draw order unchanged) and re-uploads the floor buffer. floorInstanceCount() is the
@@ -268,7 +278,7 @@ export function flush() {
   dynLast = dyn.count;
   gl.bindBuffer(gl.ARRAY_BUFFER, dyn.buf);
   gl.bufferData(gl.ARRAY_BUFFER, dyn.data.subarray(0, dyn.count * FLOATS_PER), gl.DYNAMIC_DRAW);
-  drawLayer(dyn);
+  drawLayer(dyn, 0, 0); // dynamic layer is emitted in screen space (camera already baked in)
   dyn.count = 0;
 }
 

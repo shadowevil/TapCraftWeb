@@ -10,9 +10,8 @@ import {
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
 import { playBtn, pauseBtn } from "./dom.js";
-import { growthStep } from "./rng.js";
 import { visibleCellBounds } from "./iso.js";
-import { stageAt, progressAt, setStage, setProgress, setChop, clampBox } from "./cells.js";
+import { setStage, setProgress, setChop, clampBox, growCell } from "./cells.js";
 import { PERF, pBegin, pEnd, pFps } from "./perf.js";
 import { updateAmbient } from "./ambient.js";
 import { updateWeather } from "./weather.js";
@@ -52,22 +51,10 @@ function growthTick() {
   const expectedGain = 0.5 * (GD.worldgen.gainMin + GD.worldgen.gainMax) / 2;
   const bands = (GD.worldgen.growth && GD.worldgen.growth.bands) || [{ radius: 40, period: 1 }];
 
-  const grow = (c, r, exact, mult) => {
-    const st = stageAt(c, r);
-    if (st < 0 || st >= mature) return;
-    const gain = exact ? growthStep(c, r, t, seed) : expectedGain * mult;
-    if (gain <= 0) return;
-    let pr = progressAt(c, r) + gain * g;
-    let stage = st;
-    if (exact) {
-      if (pr >= stageFull) { stage = st + 1; pr = 0; }
-    } else {
-      while (pr >= stageFull && stage < mature) { stage++; pr -= stageFull; }
-      if (stage >= mature) { stage = mature; pr = 0; }
-    }
-    setStage(c, r, stage);
-    setProgress(c, r, pr);
-  };
+  // One keyed lookup per cell (see cells.growCell), down from four. AMORTIZED bands
+  // pass their precomputed gain (expectedGain * period); EXACT bands derive gain
+  // from growthStep inside the helper.
+  const grow = (c, r, exact, mult) => growCell(c, r, mature, stageFull, expectedGain * mult, exact, t, seed, g);
 
   // Priority radius around the viewport CENTER: band 0 (period 1, exact growth) is
   // a capped disc; each outer band is a lower-frequency ring radiating outward;
@@ -165,7 +152,14 @@ export function updateAnimations(dtMs) {
   for (let i = G.drops.length - 1; i >= 0; i--) {
     const d = G.drops[i];
     if (d.phase === "fly") {
-      if ((G.animTime - d.flyT0) / FLY_MS >= 1) { collectDrop(d.kind); G.drops.splice(i, 1); }
+      if ((G.animTime - d.flyT0) / FLY_MS >= 1) {
+        collectDrop(d.kind);
+        // swap-remove: O(1), and safe in this back-to-front loop (the tail element
+        // was already visited this frame). Drops are unordered particles.
+        const last = G.drops.length - 1;
+        if (i !== last) G.drops[i] = G.drops[last];
+        G.drops.length = last;
+      }
       continue;
     }
     d.gx += d.vx * dt;

@@ -39,6 +39,11 @@ const BUG_COLORS = [
 
 const W = () => canvas.clientWidth || 1;
 const H = () => canvas.clientHeight || 1;
+// canvas.clientWidth/Height are layout-touching DOM reads. The per-particle offscreen
+// tests call them for every cloud/swarm/bird/beam each frame; cache them once per
+// updateAmbient (refreshed at the top of that function) and read the cache in the
+// hot loops. Default 0 falls back to a live read for the rare off-frame caller.
+let frameW = 0, frameH = 0;
 const rand = (a, b) => a + Math.random() * (b - a);
 const pick = (arr, i, d) => (Array.isArray(arr) ? arr[i] : (arr != null ? arr : d));
 
@@ -84,7 +89,8 @@ function landSpawnWorld() {
 }
 function offscreen(wx, wy, m) {
   const s = worldToScreen(wx, wy), mm = m || OFFSCREEN_M;
-  return s.x < -mm || s.x > W() + mm || s.y < -mm || s.y > H() + mm;
+  const w = frameW || W(), h = frameH || H();
+  return s.x < -mm || s.x > w + mm || s.y < -mm || s.y > h + mm;
 }
 
 // --- Clouds (world-anchored shadow drawn as darkened iso TILES) ------
@@ -114,7 +120,7 @@ function newCloud(inView) {
 }
 function cloudMargin(c) { return c.rCells * 2 * HALF_W * G.cam.zoom + 24; }
 function recycleCloud(c) {
-  const m = cloudMargin(c), w = W(), h = H();
+  const m = cloudMargin(c), w = frameW || W(), h = frameH || H();
   let sx, sy;
   if (Math.abs(c.vx) >= Math.abs(c.vy)) { sx = c.vx >= 0 ? -m : w + m; sy = rand(-m * 0.2, h + m * 0.2); }
   else { sy = c.vy >= 0 ? -m : h + m; sx = rand(-m * 0.2, w + m * 0.2); }
@@ -131,7 +137,7 @@ export function cloudShadowAt(wx, wy) {
   let cover = 0;
   for (const f of cloudField) {
     const dx = fcol - f.ccol, dy = frow - f.crow, d2 = dx * dx + dy * dy;
-    if (d2 >= f.r * f.r) continue;                 // squared-distance early-out (no sqrt)
+    if (d2 >= f.r2) continue;                       // squared-distance early-out (no sqrt)
     const v = 1 - Math.sqrt(d2) / f.r;
     if (v > cover) cover = v;
   }
@@ -142,7 +148,7 @@ export function cloudShadowAt(wx, wy) {
 function rebuildCloudField() {
   cloudField.length = 0;
   for (const c of clouds) {
-    cloudField.push({ ccol: c.wx / (2 * HALF_W) + c.wy / (2 * HALF_H), crow: c.wy / (2 * HALF_H) - c.wx / (2 * HALF_W), r: c.rCells });
+    cloudField.push({ ccol: c.wx / (2 * HALF_W) + c.wy / (2 * HALF_H), crow: c.wy / (2 * HALF_H) - c.wx / (2 * HALF_W), r: c.rCells, r2: c.rCells * c.rCells });
   }
 }
 
@@ -272,6 +278,7 @@ export function updateAmbient(dtMs) {
   if (!GD.ambient || !G.hasWorld) return;
   if (!inited) initAmbient();
   const dt = Math.min(0.05, dtMs / 1000);
+  frameW = W(); frameH = H(); // one DOM geometry read per frame for the offscreen tests
 
   // Shared wind: all clouds drift one direction, which EASES toward a new random
   // heading every windSwitchMs (gradual shortest-arc turn - no instant reverses or

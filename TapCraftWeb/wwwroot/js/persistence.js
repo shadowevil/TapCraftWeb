@@ -6,7 +6,7 @@ import { WORLDS_KEY, CURRENT_KEY, worldKey } from "./config.js";
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
 import { newTools, resetTransients } from "./worldgen.js";
-import { initWorldGen } from "./cells.js";
+import { initWorldGen, createMods, modsToEntries, modsFromEntries, modsSetCell } from "./cells.js";
 import { updateResourceUI } from "./ui.js";
 import { updateCraftedHud } from "./crafting.js";
 
@@ -136,7 +136,36 @@ export function readWorldsIndex() {
 export function writeWorldsIndex(list) {
   try { localStorage.setItem(WORLDS_KEY, JSON.stringify(list)); } catch (e) { /* ignore */ }
 }
+// --- Save scheduling ---------------------------------------------------------
+// saveWorld() is fired liberally (every craft unit, deposit/withdraw click, build,
+// pause, the 5s autosave). Each call used to do a FULL world JSON.stringify +
+// synchronous localStorage write, so a burst (bulk craft, +/- spamming) stuttered
+// the main thread. Now the hot callers COALESCE: mark dirty + schedule one trailing
+// flush. The durability guarantee (incl. the craft data-loss fix) is preserved by
+// flushing SYNCHRONOUSLY via saveWorldNow() on every context-leaving path - tab
+// hide / unload (main.js) and returning to the menu / explicit Save (ui.js) - so a
+// charged unit always reaches disk before the world is left or the page goes away.
+let saveTimer = 0, saveDirty = false;
+const SAVE_DEBOUNCE_MS = 700;
 export function saveWorld() {
+  if (!G.hasWorld || !G.world.id) return; // menu background has no id -> not saved
+  saveDirty = true;
+  if (!saveTimer) saveTimer = setTimeout(flushSave, SAVE_DEBOUNCE_MS);
+}
+function flushSave() {
+  saveTimer = 0;
+  if (!saveDirty) return;
+  saveDirty = false;
+  doSave();
+}
+// Immediate, synchronous write. A pending debounced flush would never run once the
+// page is unloading or G.world is about to be swapped, so these paths call this.
+export function saveWorldNow() {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = 0; }
+  saveDirty = false;
+  doSave();
+}
+function doSave() {
   if (!G.hasWorld || !G.world.id) return; // menu background has no id -> not saved
   try {
     // Terrain is procedural - we save the seed + settings, NOT the cells. Only the
@@ -148,7 +177,7 @@ export function saveWorld() {
       settings: G.world.settings,
       landThreshold: G.world.landThreshold, spawn: G.world.spawn,
       cam: { x: G.cam.x, y: G.cam.y, zoom: G.cam.zoom },
-      mods: Array.from(G.world.mods.entries()),
+      mods: modsToEntries(G.world.mods),
       wood: G.world.wood, stone: G.world.stone, iron: G.world.iron, gold: G.world.gold,
       iron_ingot: G.world.iron_ingot, gold_ingot: G.world.gold_ingot, gold_coin: G.world.gold_coin,
       tools: G.world.tools, craft: G.world.craft,
@@ -169,6 +198,10 @@ export function saveWorld() {
   } catch (e) { /* storage full / unavailable */ }
 }
 export function loadWorld(id) {
+  // Drop any pending debounced flush: it would target the world we are about to
+  // replace (the caller saved it synchronously via showMainMenu first).
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = 0; }
+  saveDirty = false;
   const json = localStorage.getItem(worldKey(id));
   if (!json) return false;
   try {
@@ -185,11 +218,11 @@ export function loadWorld(id) {
     if ((d.version | 0) >= 11) {
       if (typeof d.landThreshold === "number") G.world.landThreshold = d.landThreshold;
       if (d.spawn) G.world.spawn = d.spawn;
-      G.world.mods = new Map(Array.isArray(d.mods) ? d.mods : []);
+      G.world.mods = modsFromEntries(d.mods);
     } else {
       // Pre-procedural saves (always small) stored full cell arrays; import every
       // cell as an explicit delta so the world renders exactly as it was saved.
-      G.world.mods = new Map();
+      G.world.mods = createMods();
       migrateLegacyArrays(d);
     }
     G.world.wood = d.wood | 0;
@@ -248,7 +281,7 @@ function migrateLegacyArrays(d) {
       if (hasP && d.progress[r]) e.pr = d.progress[r][c];
       if (hasC && d.chop[r]) e.ch = d.chop[r][c] | 0;
       if (hasR && d.rock[r]) e.rk = d.rock[r][c];
-      G.world.mods.set(c + "," + r, e);
+      modsSetCell(G.world.mods, c, r, e);
     }
   }
 }

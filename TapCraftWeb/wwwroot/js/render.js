@@ -20,7 +20,7 @@ import {
 import { popFactor, dropImage, dropScreen } from "./resources.js";
 import { canPlaceFootprint, canAffordBuilding, buildingTargets, cellsInRange, hutToolKind, hutToolCount } from "./buildings.js";
 import { mineableAt, mineableSprite } from "./mineable.js";
-import { tileAt, stageAt, progressAt, chopAt, rockRawAt, baseCacheSize, decorAt, shoreDist, biomeAt, moistureAt, landHeightAt, uplandAt, wrapCol, wrapRow, hydroClassAt, iceAt, temperatureAt, snownessAt, desertAt } from "./cells.js";
+import { tileAt, stageAt, progressAt, chopAt, rockRawAt, baseCacheSize, decorAt, shoreDist, biomeAt, moistureAt, landHeightAt, uplandAt, wrapCol, wrapRow, hydroClassAt, iceAt, temperatureAt, snownessAt, desertAt, modsSize, clampBox } from "./cells.js";
 import * as glr from "./gl/glrender.js";
 import { uvFor } from "./gl/atlas.js";
 import { PERF, pBegin, pEnd, pCount } from "./perf.js";
@@ -402,28 +402,61 @@ function drawSmokeFrame(img, cx, baseY, unit, alpha) {
 // we render the floor once into an offscreen canvas and blit it; it is only
 // re-rendered when its signature changes. The offscreen canvas mirrors the main
 // canvas backing + DPR transform so the blit is a 1:1 device-pixel copy.
-let floorCanvas = null, floorCtx = null, floorKey = "";
-let glFloorKey = ""; // signature of the cached GL floor instance buffer (rebuild on change)
+// 2D fallback floor cache (scrolling): the offscreen holds the floor for the viewport plus a
+// FLOOR_2D_MARGIN-px ring, rendered relative to floorRefCam. A pan just BLITS the cached layer
+// shifted by the integer camera delta (no per-tile redraw); it is re-rendered only when the
+// zoom/water frame changes or the camera scrolls past the margin ring. floorRefValid gates the
+// first render / forced redraws.
+let floorCanvas = null, floorCtx = null;
+let floorRefCamX = 0, floorRefCamY = 0, floorCacheZoom = -1, floorCacheWater = -1, floorRefValid = false;
+const FLOOR_2D_MARGIN = 160; // CSS px ring rendered beyond the viewport (covers a pan before re-render)
+// The GL floor is emitted in WORLD-screen space and panned via a shader uniform, so it is
+// rebuilt only when the zoom changes or the view scrolls past the emitted margin (NOT on a
+// plain pan). glFloorBox is the cell range currently baked into the buffer; glFloorZoom the
+// zoom it was emitted at. FLOOR_EMIT_MARGIN is the extra cell ring emitted around the visible
+// box so small pans stay inside the cached buffer (fewer rebuilds during a drag).
+let glFloorBox = null, glFloorZoom = -1;
+let glFloorRefC = 0, glFloorRefR = 0; // reference cell the floor instances are emitted relative to
+const FLOOR_EMIT_MARGIN = 6;
 // DEV live-reload (gamedata.js): when an edited pack is hot-applied, drop the floor cache so
 // tile-appearance tweaks redraw immediately (entity-pass data already re-reads GD each frame).
-window.addEventListener("tapcraft:packreload", () => { floorKey = ""; glFloorKey = ""; });
+window.addEventListener("tapcraft:packreload", () => { floorRefValid = false; glFloorBox = null; });
 let glWasOn = false; // was the GL path active last frame (force a floor rebuild when it resumes)
 let glWaterTiles = [];     // [{idx,c,r}] cached-floor instance indices of visible water tiles
 let glWaterFrameCached = -1; // the water frame currently baked into the cached floor buffer
 let frameShadowMul = 1; // object-shadow alpha multiplier for this frame (day/night)
 let frameShadowSkip = false; // this frame, skip object cast shadows (too many entities)
 function ensureFloorCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  // Offscreen = viewport + a margin ring on every side (so a pan can blit instead of redraw).
+  const wantW = Math.ceil((canvas.clientWidth + 2 * FLOOR_2D_MARGIN) * dpr);
+  const wantH = Math.ceil((canvas.clientHeight + 2 * FLOOR_2D_MARGIN) * dpr);
   if (!floorCanvas) { floorCanvas = document.createElement("canvas"); floorCtx = floorCanvas.getContext("2d"); }
-  if (floorCanvas.width !== canvas.width || floorCanvas.height !== canvas.height) {
-    floorCanvas.width = canvas.width; floorCanvas.height = canvas.height;
-    floorKey = ""; // size changed -> force a redraw
+  if (floorCanvas.width !== wantW || floorCanvas.height !== wantH) {
+    floorCanvas.width = wantW; floorCanvas.height = wantH;
+    floorRefValid = false; // size changed -> force a redraw
   }
+}
+// Cell-range bounding box for an arbitrary CSS screen rect (used to cover the margin-expanded
+// 2D floor offscreen). Mirrors visibleCellBounds but for [x0,x1] x [y0,y1] instead of the canvas.
+function cellBoundsForRect(x0, y0, x1, y1) {
+  const pts = [screenToWorld(x0, y0), screenToWorld(x1, y0), screenToWorld(x0, y1), screenToWorld(x1, y1)];
+  let minC = Infinity, maxC = -Infinity, minR = Infinity, maxR = -Infinity;
+  for (const p of pts) {
+    const cc = worldToCell(p.x, p.y);
+    minC = Math.min(minC, cc.col); maxC = Math.max(maxC, cc.col);
+    minR = Math.min(minR, cc.row); maxR = Math.max(maxR, cc.row);
+  }
+  const M = 2;
+  return clampBox(Math.floor(minC) - M, Math.ceil(maxC) + M, Math.floor(minR) - M, Math.ceil(maxR) + M);
 }
 function renderFloor(b, z, waterFrame) {
   const dpr = window.devicePixelRatio || 1;
-  floorCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // Origin shifted by the margin so screen point (sx,sy) [relative to the current camera, which
+  // is the reference camera at render time] lands at offscreen px (sx+MARGIN, sy+MARGIN)*dpr.
+  floorCtx.setTransform(dpr, 0, 0, dpr, FLOOR_2D_MARGIN * dpr, FLOOR_2D_MARGIN * dpr);
   floorCtx.imageSmoothingEnabled = false;
-  floorCtx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+  floorCtx.clearRect(-FLOOR_2D_MARGIN, -FLOOR_2D_MARGIN, canvas.clientWidth + 2 * FLOOR_2D_MARGIN, canvas.clientHeight + 2 * FLOOR_2D_MARGIN);
   const cx = G.cam.x, cy = G.cam.y, half = (SPRITE / 2) * z;
   const ter = GD.worldgen.terrain || {};
   const shMax = ter.shallowTiles || 0, shCol = ter.shallowColor || [150, 205, 225], shA = ter.shallowAlpha || 0;
@@ -454,9 +487,14 @@ function renderFloor(b, z, waterFrame) {
 // WebGL floor: emit one instance per visible ground tile (no offscreen cache - the GPU
 // redraws the whole floor cheaply each frame). Same screen math as renderFloor. Coastal
 // shallows are re-added as a per-instance tint in a later phase.
-function emitFloorGL(b, z, waterFrame) {
+function emitFloorGL(b, z, waterFrame, refC, refR) {
   glWaterTiles.length = 0; // rebuilt with the floor: indices of water tiles for the UV patch
-  const cx = G.cam.x, cy = G.cam.y, half = (SPRITE / 2) * z;
+  // World-screen space, RELATIVE to the reference cell (refC,refR): NO camera offset is baked
+  // in (the shader adds it via u_cam/setFloorCam), so the cached buffer survives a pan. Emitting
+  // relative to the reference keeps instance positions small -> float32-precise even on a globe/
+  // infinite world panned far from the origin. Zoom IS baked, hence re-emit on a zoom change.
+  const cx = -((refC - refR) * HALF_W) * z, cy = -((refC + refR) * HALF_H) * z;
+  const half = (SPRITE / 2) * z;
   const ter = GD.worldgen.terrain || {};
   const shMax = ter.shallowTiles || 0, shA = ter.shallowAlpha || 0;
   for (let r = b.r0; r <= b.r1; r++) {
@@ -466,12 +504,15 @@ function emitFloorGL(b, z, waterFrame) {
       if (!tImg || !tImg.naturalWidth) continue;
       const sx = (c - r) * HALF_W * z + cx, sy = (c + r) * HALF_H * z + cy;
       const dw = (tImg.naturalWidth || SPRITE) * z, dh = (tImg.naturalHeight || SPRITE) * z;
-      if (tile === "water" && !iceAt(c, r)) glWaterTiles.push({ idx: glr.floorInstanceCount(), c, r }); // ice is static, not animated
+      // iceAt() goes through the memo string-key path; evaluate it once per water cell.
+      const isWater = tile === "water";
+      const ice = isWater && iceAt(c, r);
+      if (isWater && !ice) glWaterTiles.push({ idx: glr.floorInstanceCount(), c, r }); // ice is static, not animated
       // Coastal shallows: lighten + cyan-shift water near shore via a per-instance tint (the
       // GL stand-in for the 2D translucent overlay). Strength fades with shore distance, and
       // it bakes into the cached floor buffer (pure per-cell, like the 2D version).
       let tint = null;
-      if (shMax > 0 && shA > 0 && tile === "water" && !iceAt(c, r)) {
+      if (shMax > 0 && shA > 0 && isWater && !ice) {
         const sd = shoreDist(c, r);
         if (sd >= 1) {
           const s = shA * (1 - (sd - 1) / shMax);
@@ -650,10 +691,16 @@ export function render() {
     // were recreated). Water animates at EVERY zoom without a rebuild: on a water tick, only
     // the cached water tiles' UVs are rewritten in place (cheap) and the buffer re-uploaded.
     const glWaterFrame = waterFrameIndex(); // GL animates water at all zooms (no 2D-style freeze)
-    const fkey = G.cam.x + "|" + G.cam.y + "|" + z + "|" + b.c0 + "|" + b.r0 + "|" + b.c1 + "|" + b.r1;
-    if (!glWasOn || fkey !== glFloorKey) {
-      glr.beginFloor(); emitFloorGL(b, z, glWaterFrame); glr.endFloor();
-      glFloorKey = fkey; glWaterFrameCached = glWaterFrame;
+    // Rebuild the floor buffer only when the zoom changed, the GL path just resumed, or the
+    // visible box has scrolled past the emitted (margin-padded) box. A plain pan does neither,
+    // so it only updates the u_cam uniform below - no per-frame floor re-emit.
+    const needFloorEmit = !glWasOn || z !== glFloorZoom || !glFloorBox ||
+      b.c0 < glFloorBox.c0 || b.c1 > glFloorBox.c1 || b.r0 < glFloorBox.r0 || b.r1 > glFloorBox.r1;
+    if (needFloorEmit) {
+      const eb = clampBox(b.c0 - FLOOR_EMIT_MARGIN, b.c1 + FLOOR_EMIT_MARGIN, b.r0 - FLOOR_EMIT_MARGIN, b.r1 + FLOOR_EMIT_MARGIN);
+      glFloorRefC = eb.c0; glFloorRefR = eb.r0;
+      glr.beginFloor(); emitFloorGL(eb, z, glWaterFrame, glFloorRefC, glFloorRefR); glr.endFloor();
+      glFloorBox = eb; glFloorZoom = z; glWaterFrameCached = glWaterFrame;
     } else if (glWaterTiles.length && glWaterFrame !== glWaterFrameCached) {
       for (const w of glWaterTiles) {
         const uv = uvFor(tileSprite("water", w.c, w.r, glWaterFrame));
@@ -662,15 +709,30 @@ export function render() {
       glr.reuploadFloor();
       glWaterFrameCached = glWaterFrame;
     }
+    // Re-add the reference cell + camera in float64, pass the small result as u_cam: floor
+    // screen pos = (instance, relative to ref) + u_cam = the same screen pos as before the pan.
+    const fz = glFloorZoom;
+    glr.setFloorCam((glFloorRefC - glFloorRefR) * HALF_W * fz + G.cam.x, (glFloorRefC + glFloorRefR) * HALF_H * fz + G.cam.y);
     glr.drawFloor();
     // entities + drops emit into the dynamic batch below; flush + env tint happen after them.
   } else {
     ensureFloorCanvas();
-    const fkey = G.cam.x + "|" + G.cam.y + "|" + z + "|" + waterFrame + "|" + b.c0 + "|" + b.r0 + "|" + b.c1 + "|" + b.r1;
-    if (fkey !== floorKey) { renderFloor(b, z, waterFrame); floorKey = fkey; }
+    const dpr = window.devicePixelRatio || 1;
+    // Re-render the offscreen only when the zoom/water frame changed or the camera has panned
+    // past the margin ring; otherwise the cached floor is still valid and we just blit it
+    // shifted by the integer camera delta. This keeps a plain pan to a single device-pixel copy.
+    const dx = G.cam.x - floorRefCamX, dy = G.cam.y - floorRefCamY;
+    if (!floorRefValid || z !== floorCacheZoom || waterFrame !== floorCacheWater ||
+        Math.abs(dx) > FLOOR_2D_MARGIN - 1 || Math.abs(dy) > FLOOR_2D_MARGIN - 1) {
+      const eb = cellBoundsForRect(-FLOOR_2D_MARGIN, -FLOOR_2D_MARGIN,
+        canvas.clientWidth + FLOOR_2D_MARGIN, canvas.clientHeight + FLOOR_2D_MARGIN);
+      renderFloor(eb, z, waterFrame);
+      floorRefCamX = G.cam.x; floorRefCamY = G.cam.y; floorCacheZoom = z; floorCacheWater = waterFrame; floorRefValid = true;
+    }
+    const ddx = G.cam.x - floorRefCamX, ddy = G.cam.y - floorRefCamY; // 0 right after a re-render
     ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);   // identity: blit backing 1:1
-    ctx.drawImage(floorCanvas, 0, 0);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);   // identity: blit backing at the device-pixel cam delta
+    ctx.drawImage(floorCanvas, Math.round((ddx - FLOOR_2D_MARGIN) * dpr), Math.round((ddy - FLOOR_2D_MARGIN) * dpr));
     ctx.restore();
   }
   pCount("cells", (b.c1 - b.c0 + 1) * (b.r1 - b.r0 + 1));
@@ -965,7 +1027,7 @@ function drawDebugOverlay(z) {
     if (PERF.ms[name] !== undefined) lines.push("  " + name.padEnd(9) + PERF.ms[name].toFixed(2));
   }
   lines.push("cells " + (PERF.count.cells || 0) + "  entities " + (PERF.count.entities || 0) + "  shadows " + (G.useGL ? "GL" : (frameShadowSkip ? "OFF(dense)" : "on")) + (G.useGL ? "  inst " + glr.instanceCount() : ""));
-  lines.push("baseCache " + baseCacheSize() + "  mods " + G.world.mods.size);
+  lines.push("baseCache " + baseCacheSize() + "  mods " + modsSize(G.world.mods));
   const ac = ambientCounts();
   lines.push("ambient  clouds " + ac.clouds + " swarms " + ac.swarms + " bugs " + ac.bugs + " birds " + ac.birds + " beams " + ac.beams);
   const tod = G.world.timeOfDay || 0, hh = Math.floor(tod * 24), mm = Math.floor((tod * 24 - hh) * 60);

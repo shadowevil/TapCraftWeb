@@ -14,7 +14,7 @@ import { glCanvas } from "./dom.js";
 import { initGL, uploadAtlas } from "./gl/glrender.js";
 import { buildAtlas } from "./gl/atlas.js";
 import { wireUi, resizeCanvas, fitMenu, showMainMenu } from "./ui.js";
-import { saveWorld } from "./persistence.js";
+import { saveWorld, saveWorldNow } from "./persistence.js";
 import { frame } from "./sim.js";
 import { initAudio, loadSounds } from "./sound.js";
 import "./input.js";
@@ -56,9 +56,9 @@ async function init() {
   window.addEventListener("resize", () => { resizeCanvas(); if (G.inMenu) fitMenu(); });
 
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) { saveWorld(); G.lastTime = 0; G.acc = 0; }
+    if (document.hidden) { saveWorldNow(); G.lastTime = 0; G.acc = 0; } // sync: tab may be closing
   });
-  window.addEventListener("beforeunload", saveWorld);
+  window.addEventListener("beforeunload", saveWorldNow); // sync: a debounced flush would not run
   setInterval(saveWorld, AUTOSAVE_MS);
 
   loadImages().then(() => {
