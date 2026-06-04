@@ -9,7 +9,8 @@ import { G } from "./state.js";
 import { GD } from "./gamedata.js";
 import { consoleOverlay, consoleLogEl, consoleInput } from "./dom.js";
 import { updateResourceUI } from "./ui.js";
-import { addTool } from "./resources.js";
+import { addTool, toolDurabilityFor } from "./resources.js";
+import { updateCraftedHud } from "./crafting.js";
 import { setWeather, weatherKinds } from "./env.js";
 import { wetStatus } from "./wetness.js";
 import { glReady } from "./gl/glrender.js";
@@ -17,8 +18,13 @@ import { glReady } from "./gl/glrender.js";
 const MAX_LOG = 200; // keep memory bounded; CSS limits visible lines to ~10
 
 // --- Command registry -------------------------------------------------
+// `usage` may be a FUNCTION: registry-driven commands (addresource/addtool) build
+// their usage line from GD at help-time, so new content (hoes, bucket, wheat, ...)
+// is listed automatically with no console edit. GD is empty until the pack loads,
+// hence the `|| {}` guards in those usages.
 const COMMANDS = new Map();
 function register(name, usage, run) { COMMANDS.set(name, { name, usage, run }); }
+const usageOf = (c) => (typeof c.usage === "function" ? c.usage() : c.usage);
 
 // Parse a positive integer argument, defaulting when absent/blank.
 function intArg(v, def) {
@@ -27,7 +33,7 @@ function intArg(v, def) {
   return Number.isFinite(n) ? n : NaN;
 }
 
-register("addresource", "addresource <wood|stone> [amount=1]", (args) => {
+register("addresource", () => "addresource <" + Object.keys(GD.resources || {}).join("|") + "> [amount=1]", (args) => {
   if (!G.hasWorld) return { text: "No active world.", error: true };
   const kind = args[0];
   if (!kind || !GD.resources[kind]) {
@@ -40,7 +46,7 @@ register("addresource", "addresource <wood|stone> [amount=1]", (args) => {
   return "Added " + n + " " + kind + " (total " + G.world[kind] + ").";
 });
 
-register("addtool", "addtool <hatchet|pickaxe> [amount=1]", (args) => {
+register("addtool", () => "addtool <" + Object.keys(GD.tools || {}).join("|") + "> [amount=1]", (args) => {
   if (!G.hasWorld) return { text: "No active world.", error: true };
   const type = args[0];
   if (!type || !GD.tools[type]) {
@@ -50,6 +56,36 @@ register("addtool", "addtool <hatchet|pickaxe> [amount=1]", (args) => {
   if (!Number.isFinite(n) || n <= 0) return { text: "Amount must be a positive integer.", error: true };
   for (let i = 0; i < n; i++) addTool(type);
   return "Added " + n + " " + GD.tools[type].name + " (count " + G.world.tools[type].count + ").";
+});
+
+// Move buckets between the empty and filled stacks (farming dev: test watering
+// without a lake). No durability is spent - this is a free dev transfer.
+register("bucket", "bucket <fill|empty> [amount=1]", (args) => {
+  if (!G.hasWorld) return { text: "No active world.", error: true };
+  const a = (args[0] || "").toLowerCase();
+  if (a !== "fill" && a !== "empty") return { text: "Usage: bucket <fill|empty> [amount=1]", error: true };
+  const n = intArg(args[1], 1);
+  if (!Number.isFinite(n) || n <= 0) return { text: "Amount must be a positive integer.", error: true };
+  const tools = G.world.tools;
+  const fromId = a === "fill" ? "bucket" : "bucket_water";
+  const toId = a === "fill" ? "bucket_water" : "bucket";
+  const from = tools[fromId];
+  if (!from || from.count <= 0) {
+    return { text: a === "fill" ? "No empty buckets. Try: addtool bucket" : "No filled buckets.", error: true };
+  }
+  const to = tools[toId] || (tools[toId] = { count: 0, dura: 0 });
+  let moved = 0;
+  while (moved < n && from.count > 0) {
+    const d = from.dura;
+    from.count -= 1;
+    from.dura = from.count > 0 ? toolDurabilityFor(fromId) : 0;
+    to.count += 1;
+    if (to.count === 1) to.dura = d; // first arrival becomes the active instance
+    moved++;
+  }
+  updateCraftedHud();
+  return "Moved " + moved + " bucket(s) to the " + (a === "fill" ? "filled" : "empty") + " stack (" +
+    ((tools.bucket && tools.bucket.count) | 0) + " empty / " + ((tools.bucket_water && tools.bucket_water.count) | 0) + " filled).";
 });
 
 // Toggle the live cell-inspector overlay (drawn in render.js).
@@ -62,15 +98,10 @@ register("debugoverlay", "debugoverlay <true|false>", (args) => {
   return "Debug overlay " + (G.debugOverlay ? "ON" : "OFF") + ". Hover a tile to inspect it.";
 });
 
-// Toggle the WebGL2 world renderer vs the Canvas-2D fallback (for A/B during the GL
-// migration). No-op if WebGL2 was unavailable at startup.
-register("gl", "gl <on|off>", (args) => {
-  if (!glReady()) return { text: "WebGL2 renderer unavailable; using the 2D path.", error: true };
-  const a = (args[0] || "").toLowerCase();
-  if (a === "on" || a === "true" || a === "1") G.useGL = true;
-  else if (a === "off" || a === "false" || a === "0") G.useGL = false;
-  else return { text: "Usage: gl <on|off>", error: true };
-  return "WebGL renderer " + (G.useGL ? "ON" : "OFF (Canvas-2D fallback)") + ".";
+// Historical: the Canvas-2D world fallback (and this toggle) were removed when
+// the game went WebGL-only. Kept as a stub so muscle memory gets an answer.
+register("gl", "gl", () => {
+  return "The Canvas-2D world renderer was removed - TapCraft is WebGL-only now (status: " + (glReady() ? "healthy" : "context lost, restoring") + ").";
 });
 
 // Jump the day/night cycle to a named time of day (dev/testing). Sets the phase
@@ -102,7 +133,7 @@ register("wet", "wet", () => {
 });
 
 register("help", "help", () => {
-  const lines = [...COMMANDS.values()].map((c) => "  " + c.usage);
+  const lines = [...COMMANDS.values()].map((c) => "  " + usageOf(c));
   return "Commands:\n" + lines.join("\n");
 });
 

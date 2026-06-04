@@ -84,3 +84,5 @@ export const TOOL_SWING_DEG = 60;     // oscillation arc
 export const TOOL_SWING_MS = 520;     // full back-and-forth period
 export const HATCHET_PIVOT_X = 27, HATCHET_PIVOT_Y = 28;        // bottom-right grip
 export const PICKAXE_PIVOT_X = 27, PICKAXE_PIVOT_Y = 28;        // bottom-right grip (handle end)
+export const HOE_PIVOT_X = 27, HOE_PIVOT_Y = 28;                // bottom-right grip (garden hoe, same 32x29 art)
+export const FARM_CURSOR_SCALE = 1.25; // static farm cursor icons (pour/fill/seeds) render scale

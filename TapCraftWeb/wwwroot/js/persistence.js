@@ -6,7 +6,7 @@ import { WORLDS_KEY, CURRENT_KEY, worldKey } from "./config.js";
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
 import { newTools, resetTransients } from "./worldgen.js";
-import { initWorldGen, createMods, modsToEntries, modsFromEntries, modsSetCell } from "./cells.js";
+import { initWorldGen, createMods, modsToEntries, modsFromEntries, modsSetCell, countTilled } from "./cells.js";
 import { wetToEntries, wetFromEntries } from "./wetness.js";
 import { updateResourceUI } from "./ui.js";
 import { updateCraftedHud } from "./crafting.js";
@@ -56,6 +56,12 @@ export function sanitizeBuildings(saved) {
         produced,
         stored,
       };
+      // What this building actually cost (scaled types refund off it; absent on
+      // old saves -> demolish falls back to the base buildCost).
+      if (b.paid && typeof b.paid === "object") {
+        rec.paid = {};
+        for (const k of Object.keys(b.paid)) rec.paid[k] = b.paid[k] | 0;
+      }
       const cat = GD.buildings[b.type].category;
       if (cat === "harvester") {
         // Tool stock is a per-tool-id map { <id>: {count,dura} }. Tolerate the
@@ -173,7 +179,7 @@ function doSave() {
     // sparse map of modified cells (G.world.mods) is persisted, so even an infinite
     // world's save stays small (it grows only with what the player changes).
     localStorage.setItem(worldKey(G.world.id), JSON.stringify({
-      version: 13, id: G.world.id, name: G.world.name,
+      version: 15, id: G.world.id, name: G.world.name,
       infinite: G.world.infinite, cols: G.world.cols, rows: G.world.rows, seed: G.world.seed,
       settings: G.world.settings,
       landThreshold: G.world.landThreshold, spawn: G.world.spawn,
@@ -182,8 +188,9 @@ function doSave() {
       wet: wetToEntries(G.world.wet),
       wood: G.world.wood, stone: G.world.stone, iron: G.world.iron, gold: G.world.gold,
       iron_ingot: G.world.iron_ingot, gold_ingot: G.world.gold_ingot, gold_coin: G.world.gold_coin,
+      wheat_seeds: G.world.wheat_seeds, wheat: G.world.wheat,
       tools: G.world.tools, craft: G.world.craft,
-      buildings: G.world.buildings.map((b) => ({ id: b.id, type: b.type, col: b.col, row: b.row, facing: b.facing,
+      buildings: G.world.buildings.map((b) => ({ id: b.id, type: b.type, col: b.col, row: b.row, facing: b.facing, paid: b.paid,
         produced: b.produced, stored: b.stored, tools: b.tools, oreStored: b.oreStored, ingots: b.ingots, fuel: b.fuel })),
       drops: G.drops.filter((d) => d.phase === "rest").map((d) => ({ kind: d.kind, gx: d.gx, gy: d.gy })),
       timeOfDay: G.world.timeOfDay, day: G.world.day | 0, tick: G.world.tick, running: G.running,
@@ -229,6 +236,9 @@ export function loadWorld(id) {
     }
     // Ground wetness overlay (added v13); absent on older saves -> starts dry.
     G.world.wet = wetFromEntries(d.wet);
+    // Farmland (added v14): the live tilled-tile counter is rebuilt from the loaded
+    // mods (it is transient); old saves have no tilled cells or farm resources.
+    G.world.tilled = countTilled(G.world.mods);
     G.world.wood = d.wood | 0;
     G.world.stone = d.stone | 0;
     G.world.iron = d.iron | 0;
@@ -236,7 +246,19 @@ export function loadWorld(id) {
     G.world.iron_ingot = d.iron_ingot | 0;
     G.world.gold_ingot = d.gold_ingot | 0;
     G.world.gold_coin = d.gold_coin | 0;
+    G.world.wheat_seeds = d.wheat_seeds | 0;
+    G.world.wheat = d.wheat | 0;
     G.world.tools = sanitizeTools(d.tools);
+    // v14 migration: filled-ness used to be a single bucketWater flag on the whole
+    // stack. Move ONE bucket (the active one, carrying its uses) onto the filled
+    // stack; v15+ saves persist the two stacks directly inside `tools`.
+    if (d.bucketWater) {
+      const e = G.world.tools.bucket, f = G.world.tools.bucket_water;
+      if (e && e.count > 0 && f && f.count === 0) {
+        f.count = 1; f.dura = e.dura;
+        e.count -= 1; e.dura = e.count > 0 ? (GD.tools.bucket.durability || GD.harvest.toolDurability) : 0;
+      }
+    }
     // Craft data-loss fix. ROOT CAUSE: in-progress crafts were saved, but the only
     // saves happened on explicit pause/play, deposits, etc - NOT when a craft was
     // queued or charged. So queueing a craft deducted resources in memory only;

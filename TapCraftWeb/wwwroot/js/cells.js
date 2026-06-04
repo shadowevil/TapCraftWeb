@@ -15,8 +15,12 @@
 
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
+import { TPS } from "./config.js";
 import { hash01, makeFbm, makeFbm4, inBounds, growthStep } from "./rng.js";
 import { encodeMineable, mineableTypeIndex } from "./mineable.js";
+// Wheat growth speed scales with ground wetness. cells.js <-> wetness.js is a
+// (safe) module cycle: both only call across at RUNTIME, never at eval time.
+import { wetnessAt } from "./wetness.js";
 
 // --- Terrain tuning (engine constants, ported from worldgen.generateTerrain) --
 const BASE_SCALE = 0.045, WARP_SCALE = 0.08, WARP_AMT = 22;
@@ -1126,6 +1130,94 @@ export function progressAt(c, r) { const e = entryAt(c, r); return (e && e.pr !=
 export function chopAt(c, r) { const e = entryAt(c, r); return (e && e.ch !== undefined) ? e.ch : 0; }
 export function rockRawAt(c, r) { const e = entryAt(c, r); return (e && e.rk !== undefined) ? e.rk : baseRockRawAt(c, r); }
 
+// --- Farmland (tilled soil + wheat) -------------------------------------------
+// Tilled tiles exist ONLY as deltas: e.t = "tilled_<1..3>", with the pre-till tile
+// retained in e.ot so the cell can revert to its original state. On a tilled cell
+// the st/pr fields mean the WHEAT crop (st = -1 none, 0..N stage sprite index, pr =
+// growth progress) instead of the procedural tree - till always writes st
+// explicitly, so the tree baseline never bleeds through. e.ft = the tick the soil
+// was last tilled / became empty, driving the unplanted auto-revert.
+export function isTilledTile(t) { return typeof t === "string" && t.length === 8 && t.startsWith("tilled_"); }
+export function tilledStageOf(t) { return isTilledTile(t) ? (t.charCodeAt(7) - 48) : 0; }
+// The wheat crop's mature stage index (last stage sprite). -1 when no wheat object.
+export function wheatMature() {
+  const w = GD.objects && GD.objects.wheat;
+  return (w && w.stageSprites) ? w.stageSprites.length - 1 : -1;
+}
+// Till (or re-till) a cell to tilled stage 1..3. First till retains the original
+// tile + clears any procedural plant; every till resets the revert clock.
+export function setTilled(c, r, stage) {
+  const e = ensureEntry(c, r);
+  const cur = (e.t !== undefined) ? e.t : baseTileAt(c, r);
+  if (!isTilledTile(cur)) {
+    e.ot = cur;                                   // retained for the revert
+    e.st = -1; e.pr = 0;                          // explicit: no crop (and no baseline tree)
+    G.world.tilled = (G.world.tilled | 0) + 1;
+  }
+  e.t = "tilled_" + stage;
+  e.ft = G.world.tick;                            // tending resets the unplanted revert clock
+  G.floorEpoch++;                                 // tile art changed -> cached floor must redraw
+}
+// Plant wheat on a tilled cell (caller validates stage/seeds). Stops the revert clock.
+export function plantAt(c, r) { const e = ensureEntry(c, r); e.st = 0; e.pr = 0; delete e.ft; }
+// Remove the crop after a harvest: soil stays tilled, revert clock restarts.
+export function clearCropAt(c, r) { const e = ensureEntry(c, r); e.st = -1; e.pr = 0; e.ft = G.world.tick; }
+// Revert an unplanted tilled cell to its retained original tile. If the baseline
+// had a plant here, nature reclaims the spot from a fresh sprout (never an instant
+// mature tree); otherwise the cell returns to its pure procedural state.
+function revertTilled(e, c, r) {
+  e.t = (e.ot !== undefined) ? e.ot : "dirt";
+  delete e.ot; delete e.ft;
+  if (baseStageAt(c, r) >= 0) { e.st = 0; e.pr = 0; }
+  else { delete e.st; delete e.pr; }
+  G.world.tilled = (G.world.tilled | 0) - 1;
+  G.floorEpoch++;
+}
+// Cosmetic-decor removal flag (foraged grass patches): the procedural decoration
+// at this cell no longer spawns/draws once cleared.
+export function decorClearedAt(c, r) { const e = entryAt(c, r); return !!(e && e.dc); }
+export function setDecorCleared(c, r) { ensureEntry(c, r).dc = 1; }
+// Rebuild the live tilled-tile counter after a load (mods came straight from disk).
+export function countTilled(m) {
+  let n = 0;
+  for (const cm of m.values()) for (const e of cm.values()) if (e.t !== undefined && isTilledTile(e.t)) n++;
+  return n;
+}
+// Wheat growth / revert for one tilled cell, from the growth tick. Growth gain is
+// the same deterministic growthStep stream trees use, scaled by ground wetness:
+// dry soil crawls at wetGrowthMin x, a saturated tile races at the wet boost. The
+// per-world creation sliders override the pack values: settings.cropGrowth is the
+// crop growth multiplier, settings.wetBoost replaces wetGrowthMax. The world
+// growthRate (g) is TREES-ONLY by design and is deliberately not applied here -
+// crops pace off growthMul x wetness x cropGrowth alone.
+function growFarmCell(e, c, r, stageFull, gainMul, exact, t, seed, g) {
+  const f = GD.farming;
+  if (!f) return;
+  const st = (e.st !== undefined) ? e.st : -1;
+  if (st < 0) {
+    // Unplanted: revert to the original tile after revertMinutes of sim time.
+    if (e.ft !== undefined && f.revertMinutes > 0 && t - e.ft >= f.revertMinutes * 60 * TPS) revertTilled(e, c, r);
+    return;
+  }
+  const mature = wheatMature();
+  if (mature < 0 || st >= mature) return;
+  let gain = exact ? growthStep(c, r, t, seed) : gainMul;
+  if (gain <= 0) return;
+  const ws = G.world.settings;
+  // Base crop pace: crops share the tree growth stream but progress at growthMul
+  // of it (0.25 = a quarter speed); the per-world cropGrowth slider stacks on top.
+  if (f.growthMul > 0) gain *= f.growthMul;
+  const wMin = (f.wetGrowthMin != null) ? f.wetGrowthMin : 0.4;
+  const wMax = (ws && ws.wetBoost > 0) ? ws.wetBoost : (f.wetGrowthMax != null) ? f.wetGrowthMax : 2.5;
+  gain *= wMin + (wMax - wMin) * wetnessAt(c, r);
+  if (ws && ws.cropGrowth > 0) gain *= ws.cropGrowth;
+  let pr = ((e.pr !== undefined) ? e.pr : 0) + gain; // no growthRate: crops pace independently of trees
+  let stage = st;
+  while (pr >= stageFull && stage < mature) { stage++; pr -= stageFull; }
+  if (stage >= mature) { stage = mature; pr = 0; }
+  e.st = stage; e.pr = pr;
+}
+
 // Diagnostics for the debug overlay.
 export function baseCacheSize() { return baseCacheCount; }
 
@@ -1147,6 +1239,8 @@ export function growCell(c, r, mature, stageFull, gainMul, exact, t, seed, g) {
   const mods = G.world.mods, col = wrapCol(c), row = wrapRow(r);
   let cm, e;
   if (mods.size > 0) { cm = mods.get(col); if (cm !== undefined) e = cm.get(row); }
+  // Tilled farmland (always a delta): wheat growth / unplanted revert instead of trees.
+  if (e !== undefined && e.t !== undefined && isTilledTile(e.t)) { growFarmCell(e, c, r, stageFull, gainMul, exact, t, seed, g); return; }
   const st = (e && e.st !== undefined) ? e.st : baseStageAt(c, r);
   if (st < 0 || st >= mature) return;
   const gain = exact ? growthStep(c, r, t, seed) : gainMul;

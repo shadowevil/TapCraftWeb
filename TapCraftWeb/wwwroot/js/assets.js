@@ -109,12 +109,15 @@ export function buildMask(img) {
   for (let i = 0; i < w * h; i++) a[i] = data[i * 4 + 3];
   return { w, h, a };
 }
-// Flat list of every building sprite Image across all ids/facings.
+// Flat list of every building sprite Image across all ids/facings, INCLUDING
+// lit-state frames (they replace the base sprite, so hit-test masks and cast
+// shadows must exist for them too).
 function allBuildingImages() {
   const out = [];
   for (const id of Object.keys(G.buildingImages)) {
     for (const facing of Object.keys(G.buildingImages[id])) out.push(G.buildingImages[id][facing]);
   }
+  for (const id of Object.keys(G.lightFrames)) out.push(...G.lightFrames[id]);
   return out;
 }
 // Flat list of every mineable sprite Image across all types/variants.
@@ -124,7 +127,8 @@ function allOreImages() {
   return out;
 }
 export function buildMasks() {
-  for (const img of [...G.stageImages, ...G.treeImages, ...allOreImages(), ...allBuildingImages()]) {
+  // Decor sprites need masks too: the grass-patch decors are clickable (foraging).
+  for (const img of [...G.stageImages, ...G.treeImages, ...G.wheatImages, ...(G.decorImages || []), ...allOreImages(), ...allBuildingImages()]) {
     if (img && img.complete && img.naturalWidth) img._mask = buildMask(img);
   }
 }
@@ -185,7 +189,7 @@ export function buildPool() {
 }
 export function buildShadows() {
   G.poolSprite = buildPool();
-  for (const img of [...G.stageImages, ...G.treeImages, ...allOreImages(), ...Object.values(G.resImages), ...allBuildingImages(), ...(G.decorImages || [])]) {
+  for (const img of [...G.stageImages, ...G.treeImages, ...G.wheatImages, ...allOreImages(), ...Object.values(G.resImages), ...allBuildingImages(), ...(G.decorImages || [])]) {
     if (img && img.complete && img.naturalWidth) img._shadow = buildShadow(img);
   }
 }
@@ -210,6 +214,13 @@ export function loadImages() {
   }
   GD.objects.tree.stageSprites.forEach((src, i) => queue(G.stageImages, i, src));
   GD.objects.tree.matureSprites.forEach((src, i) => queue(G.treeImages, i, src));
+  // Wheat crop stages (farming; absent on old packs).
+  G.wheatImages = [];
+  if (GD.objects.wheat && GD.objects.wheat.stageSprites) {
+    GD.objects.wheat.stageSprites.forEach((src, i) => queue(G.wheatImages, i, src));
+  }
+  // Bucket pour cursor (drawn on the FX overlay while hovering a waterable tile).
+  if (GD.tools.bucket_water && GD.tools.bucket_water.pourIcon) queue(G.farmImages, "pour", GD.tools.bucket_water.pourIcon);
   // Grass tile variants (biome-selected per cell; index 0 = base grass.png).
   const grassVariants = (GD.worldgen.grass && GD.worldgen.grass.variants) || [];
   G.grassVariants = [];
@@ -276,6 +287,17 @@ export function loadImages() {
     if (smoke && smoke.frames) {
       const arr = (G.smokeImages[id] = []);
       smoke.frames.forEach((src, i) => {
+        const img = (arr[i] = new Image());
+        pending.push(new Promise((res) => { img.onload = res; img.onerror = res; img.src = src; }));
+      });
+    }
+    // Optional lit-state frames (light-emitting buildings, e.g. the torch flame).
+    // These REPLACE the base sprite while lit, so they also need masks + shadows
+    // + an atlas slot (handled below / in atlas.js).
+    const light = GD.buildings[id].light;
+    if (light && light.frames) {
+      const arr = (G.lightFrames[id] = []);
+      light.frames.forEach((src, i) => {
         const img = (arr[i] = new Image());
         pending.push(new Promise((res) => { img.onload = res; img.onerror = res; img.src = src; }));
       });

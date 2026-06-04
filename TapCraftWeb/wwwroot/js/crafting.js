@@ -308,7 +308,8 @@ export function updateCraftedHud() {
     const item = document.createElement("div");
     item.className = "tc-crafted-item";
     const img = document.createElement("img");
-    img.src = def.hudIcon || def.icon; img.alt = def.name; img.title = def.name;
+    img.src = def.hudIcon || def.icon; // filled buckets are their own stack (bucket_water) with their own icon
+    img.alt = def.name; img.title = def.name;
     const count = document.createElement("span");
     count.className = "tc-crafted-count";
     count.textContent = t.count;
@@ -320,6 +321,14 @@ export function updateCraftedHud() {
     df.style.width = (t.dura / maxDura) * 100 + "%";
     dura.appendChild(df);
     item.append(img, count, dura);
+    // Garden hoes annotate their modifier so the till gesture is discoverable.
+    if ((def.kind || toolType) === "garden_hoe") {
+      const hint = document.createElement("div");
+      hint.className = "tc-crafted-hint";
+      hint.textContent = "Shift to till";
+      item.appendChild(hint);
+      item.title = def.name + " - hold Shift over grass/dirt to till";
+    }
     craftedHud.appendChild(item);
   }
 }

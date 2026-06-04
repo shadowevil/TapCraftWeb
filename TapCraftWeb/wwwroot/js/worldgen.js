@@ -49,7 +49,11 @@ export function generate(cols, rows, seed, settings) {
   G.world.gold = 0;
   G.world.iron_ingot = 0;
   G.world.gold_ingot = 0;
-  G.world.tools = newTools();
+  G.world.gold_coin = 0; // was missed before: a new world no longer inherits the last world's coins
+  G.world.wheat_seeds = 0;
+  G.world.wheat = 0;
+  G.world.tilled = 0;
+  G.world.tools = newTools(); // includes both bucket stacks (empty + filled), all zeroed
   G.world.craft = {};
   G.world.day = 1; // new world starts on day 1
   G.world.buildings = [];
@@ -74,4 +78,5 @@ export function resetTransients() {
   G.selectedBuilding = null;
   G.hoverBuilding = null;
   G.buildMode = null;
+  G.camGlide = null;      // a glide aimed at the OLD world would teleport the camera wrongly
 }

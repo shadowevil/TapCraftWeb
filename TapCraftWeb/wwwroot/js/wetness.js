@@ -17,16 +17,17 @@
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
 import { HALF_W, HALF_H } from "./config.js";
-import { wrapCol, wrapRow, moistureAt, temperatureAt, tileAt, modsSize } from "./cells.js";
+import { wrapCol, wrapRow, moistureAt, temperatureAt, tileAt, modsSize, isTilledTile } from "./cells.js";
 import { visibleCellBounds, viewCenterCell } from "./iso.js";
 import { weatherRain, dayAmount } from "./env.js";
 import { cloudShadowAt } from "./ambient.js";
 import { hash01 } from "./rng.js";
-import { globePrecipAt } from "./globeweather.js";
+import { globePrecipAt, globeWeatherAt } from "./globeweather.js";
 
 const WET_MIN = 0.002;  // below this a tile counts as dry and is dropped from storage
 const CLOUD_MIN = 0.1;  // rain (and thus wetting) only where cloud coverage exceeds this
 const EMPTY = {};        // fallback wettable map (old packs) -> every surface defaults to wettable
+let lastWetEpochTick = -1e9; // last tick the moving-wetness floor refresh was requested
 
 // --- Sparse storage (nested Map, canonical integer keys) ---------------------
 export function createWet() { return new Map(); }
@@ -64,20 +65,42 @@ function waterBaseline(c, r, wettable, cap, R, k, dither) {
   if (dither < 1) v *= dither + (1 - dither) * hash01(c, r, G.world.seed ^ 0x7e7d); // per-tile variation
   return v;
 }
-// Effective wetness 0..1 = stored rain accumulation + the water-proximity baseline.
-// NOTE: waterBaseline scans a (2R+1)^2 neighbourhood, so today this is only called for
-// inspection (debug overlay / `wet`). A future consumer reading it across the viewport
-// should precompute a water-distance field rather than call this per visible cell.
-export function wetnessAt(c, r) {
+// MEMOIZED water-proximity baseline. waterBaseline scans a (2R+1)^2 neighbourhood, and
+// wetness now has real consumers (wheat growth per crop per tick, tilled-tile darkening
+// per floor emit) - but no mechanic ever creates or removes WATER tiles, so the baseline
+// is static per world and caches perfectly. Nested integer-keyed maps like the cells
+// memo; reset on world (seed) change, size-capped for infinite worlds.
+let blSeed = -1, blCache = new Map(), blCount = 0;
+const BL_CACHE_CAP = 100000;
+function baselineAt(c, r) {
   const g = GD.weather && GD.weather.ground;
-  let v = storedAt(c, r);
-  if (g && (g.waterDampCap || 0) > 0) {
-    const wettable = (GD.worldgen.terrain && GD.worldgen.terrain.wettable) || EMPTY;
-    const R = (g.waterDampRadius | 0) || 6, k = g.waterDampK || 0.4;
-    const dither = g.waterDampDither != null ? g.waterDampDither : 1;
-    v += waterBaseline(c, r, wettable, g.waterDampCap, R, k, dither);
-  }
+  if (!g || !(g.waterDampCap > 0)) return 0;
+  const s = G.world.seed >>> 0;
+  if (s !== blSeed) { blSeed = s; blCache = new Map(); blCount = 0; }
+  const col = wrapCol(c), row = wrapRow(r);
+  let cm = blCache.get(col);
+  if (cm !== undefined) { const hit = cm.get(row); if (hit !== undefined) return hit; }
+  const wettable = (GD.worldgen.terrain && GD.worldgen.terrain.wettable) || EMPTY;
+  const R = (g.waterDampRadius | 0) || 6, k = g.waterDampK || 0.4;
+  const dither = g.waterDampDither != null ? g.waterDampDither : 1;
+  const v = waterBaseline(c, r, wettable, g.waterDampCap, R, k, dither);
+  if (blCount > BL_CACHE_CAP) { blCache = new Map(); blCount = 0; cm = undefined; }
+  if (cm === undefined) { cm = new Map(); blCache.set(col, cm); }
+  cm.set(row, v);
+  blCount++;
+  return v;
+}
+// Effective wetness 0..1 = stored rain/bucket accumulation + the water-proximity baseline.
+export function wetnessAt(c, r) {
+  const v = storedAt(c, r) + baselineAt(c, r);
   return v > 1 ? 1 : v;
+}
+// Bucket pour (farming.js): jump a tile's STORED wetness to full saturation. It then
+// dries through the normal evaporation pass like rain water would.
+export function pourWetness(c, r) {
+  const m = G.world.wet || (G.world.wet = createWet());
+  setWetness(m, c, r, 1);
+  G.floorEpoch++; // watered ground darkens immediately (tilled tiles tint by wetness)
 }
 // Get-or-create the column map and store the clamped value. Shared by the live setter and the
 // save loader (both pass FINAL canonical keys - no wrapping happens here).
@@ -128,6 +151,15 @@ function precipAt(c, r) {
   return cloudShadowAt(wx, wy) > CLOUD_MIN ? rain : 0;
 }
 
+// Cloud coverage 0..1 over a cell, for the sun/shade drying of tilled soil. GLOBE:
+// the regional weather field's cloud level; FLAT / INFINITE: the visual drifting
+// cloud shadows (the same source that gates rain, so shade matches what you see).
+function cloudCoverAt(c, r) {
+  if (G.world.wrapX) return globeWeatherAt(c, r).cloud;
+  const wx = (c - r) * HALF_W, wy = (c + r) * HALF_H;
+  return cloudShadowAt(wx, wy);
+}
+
 // Advance ground wetness one sim step (called from sim.tick, so it pauses with the
 // game). Wetting pass over the visible region while raining, then a drying pass.
 //
@@ -175,19 +207,50 @@ export function updateWetness(dtMs) {
   }
 
   // Drying: every tracked tile loses moisture by its local rate; dropped once dry.
+  // Hoed soil retains water: TILLED tiles evaporate at tilledDryMul (0.667 = the
+  // water lasts ~50% longer than on wild ground), and respond to the sky - open sun
+  // bakes them (drySunMul), cloud cover shades them (dryShadeMul). The sky effect
+  // scales with daylight (clouds block no sun at night) and is tilled-only, so the
+  // per-tile cloud lookup cost stays bounded by the player's farm size.
   if (m.size) {
-    const sun = g.dryNight + (1 - g.dryNight) * dayAmount();    // night (dryNight) .. noon (1)
+    const dayMul = dayAmount();                                 // 0 deep night .. 1 noon
+    const sun = g.dryNight + (1 - g.dryNight) * dayMul;         // night (dryNight) .. noon (1)
     const base = g.dryRate * sun * dt;                          // frame-constant part
     const damp = g.dryMoistDamp, coldMul = g.dryColdMul, globe = !!G.world.wrapX;
+    const tilledMul = (g.tilledDryMul != null) ? g.tilledDryMul : 1;
+    const sunMul = (g.drySunMul != null) ? g.drySunMul : 1.3;
+    const shadeMul = (g.dryShadeMul != null) ? g.dryShadeMul : 0.45;
+    const skyOn = dayMul > 0.001 && (sunMul !== 1 || shadeMul !== 1);
     for (const [col, cm] of m) {
       for (const [row, w] of cm) {
         let rate = base * (1 - damp * moistureAt(col, row));     // humid air -> slower
         if (globe) rate *= coldMul + (1 - coldMul) * temperatureAt(col, row); // cold band -> slower
+        if (isTilledTile(tileAt(col, row))) {
+          rate *= tilledMul;                                     // farmland holds water
+          if (skyOn) {
+            // Interpolate clear-sun .. full-shade by the cloud cover over this tile,
+            // faded by daylight so the night rate stays untouched.
+            const cloudMul = sunMul + (shadeMul - sunMul) * cloudCoverAt(col, row);
+            rate *= 1 + (cloudMul - 1) * dayMul;
+          }
+        }
         const nw = w - rate;
         if (nw <= WET_MIN) cm.delete(row);
         else cm.set(row, nw);
       }
       if (cm.size === 0) m.delete(col);
+    }
+  }
+
+  // Tilled tiles render their wetness as a darkening tint baked into the CACHED floor,
+  // so while their wet level is moving (rain falling or tracked tiles drying) the cache
+  // must refresh. Throttled to ~2x/sec; zero cost in worlds with no farmland. The < 0
+  // arm re-arms the throttle after a world switch rewinds the tick clock.
+  if ((G.world.tilled | 0) > 0 && (m.size > 0 || weatherRain() > 0.001)) {
+    const since = G.world.tick - lastWetEpochTick;
+    if (since >= 10 || since < 0) {
+      lastWetEpochTick = G.world.tick;
+      G.floorEpoch++;
     }
   }
 }

@@ -9,8 +9,9 @@ import { canvas } from "./dom.js";
 import { screenToWorld, worldToCell, minZoom } from "./iso.js";
 import { objectAt, buildingAt } from "./render.js";
 import { doHarvest } from "./resources.js";
-import { placeBuilding } from "./buildings.js";
-import { onBuildingSelected, onBuildingPlaced } from "./ui.js";
+import { farmObjectClick, farmGroundClick } from "./farming.js";
+import { placeBuilding, footprintOf } from "./buildings.js";
+import { onBuildingSelected, onBuildingPlaced, cycleTownHalls } from "./ui.js";
 import { resumeAudio } from "./sound.js";
 import { toggleConsole } from "./console.js";
 
@@ -24,6 +25,7 @@ function pointerPos(e) {
 // drags on empty ground (touch/pen have no right button).
 function startPan(e) {
   canvas.setPointerCapture(e.pointerId);
+  G.camGlide = null; // manual pan beats an in-flight Town Hall glide
   G.panning = true;
   G.panStart = { x: e.clientX, y: e.clientY, camX: G.cam.x, camY: G.cam.y };
   canvas.classList.add("dragging");
@@ -37,6 +39,7 @@ canvas.addEventListener("pointerdown", (e) => {
   if (G.inMenu) return;
   const p = pointerPos(e);
   G.mouse.x = p.x; G.mouse.y = p.y; G.mouse.on = true;
+  G.shiftDown = e.shiftKey; // keep the till modifier in sync with the actual click
 
   // RIGHT mouse button pans the camera (drag); never harvests/selects/places and leaves
   // any selection intact. The browser context menu is suppressed below so the drag works.
@@ -44,12 +47,14 @@ canvas.addEventListener("pointerdown", (e) => {
   if (e.button !== 0) return; // left button is the only other handled button
 
   // Placement mode: click places the building at the snapped footprint (cursor
-  // anchors the front tile). Never pans/harvests. Stays in buildMode on a bad
+  // anchors the FRONT tile -> rear anchor is front-(w-1,h-1), matching the ghost
+  // for any footprint size). Never pans/harvests. Stays in buildMode on a bad
   // spot so the player can reposition.
   if (G.buildMode) {
+    const fp = footprintOf(G.buildMode.type);
     const wpt = screenToWorld(p.x, p.y);
     const front = worldToCell(wpt.x, wpt.y);
-    const b = placeBuilding(G.buildMode.type, front.col - 1, front.row - 1, G.buildMode.facing);
+    const b = placeBuilding(G.buildMode.type, front.col - (fp.w - 1), front.row - (fp.h - 1), G.buildMode.facing);
     if (b) { G.buildMode = null; onBuildingPlaced(b); }
     return;
   }
@@ -67,6 +72,7 @@ canvas.addEventListener("pointerdown", (e) => {
   // empty ground/water just deselects any building (panning is the RIGHT button now).
   // Harvesting is disabled while the sim is paused.
   const obj = G.running ? objectAt(p.x, p.y) : null;
+  if (obj && farmObjectClick(obj)) return; // wheat / grass patch: single-click, never a hold
   if (obj) {
     G.harvesting = true;
     // Lock the hold to a CATEGORY ("tree" | "mine") so a drag keeps harvesting
@@ -75,6 +81,11 @@ canvas.addEventListener("pointerdown", (e) => {
     doHarvest(obj);              // first harvest is immediate
     G.lastHarvestAt = G.animTime;
   } else {
+    // Object-free ground: farming first - Shift+till, bucket fill on water,
+    // plant/pour on tilled soil. A consumed farm click never deselects.
+    const wpt = screenToWorld(p.x, p.y);
+    const cell = worldToCell(wpt.x, wpt.y);
+    if (farmGroundClick(cell.col, cell.row, e.shiftKey)) return;
     G.selectedBuilding = null;   // click on empty space deselects
     onBuildingSelected(null);
     // Touch/pen have no right button, so they keep drag-to-pan on empty ground.
@@ -86,6 +97,7 @@ canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 canvas.addEventListener("pointermove", (e) => {
   const p = pointerPos(e);
   G.mouse.x = p.x; G.mouse.y = p.y; G.mouse.on = true;
+  G.shiftDown = e.shiftKey; // catches Shift presses/releases that happen off-window
   if (!G.panning) return;
   G.cam.x = G.panStart.camX + (e.clientX - G.panStart.x);
   G.cam.y = G.panStart.camY + (e.clientY - G.panStart.y);
@@ -105,6 +117,7 @@ canvas.addEventListener("pointercancel", endPan);
 canvas.addEventListener("wheel", (e) => {
   if (G.inMenu) return;
   e.preventDefault();
+  G.camGlide = null; // manual zoom beats an in-flight Town Hall glide
   const p = pointerPos(e);
   const before = screenToWorld(p.x, p.y);
   const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
@@ -125,6 +138,9 @@ window.addEventListener("mousemove", (e) => {
 // Keyboard: R rotates the placement ghost (SE<->SW); Esc cancels placement,
 // or closes the selected building's panel. Ignored in the menu or while typing.
 window.addEventListener("keydown", (e) => {
+  // Shift = the till modifier (passive state; tracked before any early return so
+  // the hoe cursor appears the moment Shift goes down).
+  if (e.key === "Shift") G.shiftDown = true;
   // Backtick toggles the dev console from anywhere (swallow it so it doesn't
   // type into any field or fire a game key).
   if (e.key === "`" || e.key === "~") { toggleConsole(); e.preventDefault(); return; }
@@ -138,5 +154,10 @@ window.addEventListener("keydown", (e) => {
   } else if (e.key === "Escape") {
     if (G.buildMode) { G.buildMode = null; }
     else if (G.selectedBuilding) { G.selectedBuilding = null; onBuildingSelected(null); }
+  } else if (e.key === "h" || e.key === "H") {
+    // Town Hall travel: H cycles forward through the halls, Shift+H backwards.
+    cycleTownHalls(e.shiftKey ? -1 : 1);
   }
 });
+window.addEventListener("keyup", (e) => { if (e.key === "Shift") G.shiftDown = false; });
+window.addEventListener("blur", () => { G.shiftDown = false; }); // alt-tab never wedges the modifier

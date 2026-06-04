@@ -1,14 +1,16 @@
 // TapCraft - minimap: a coarse, zoomable top-down map of the world, drawn into the forecast
 // panel. The whole (bounded) world is sampled ONCE into an offscreen "world map" (shaded water
-// / land / biome blocks); each frame just blits the windowed region CENTRED on the player +
-// draws the viewport + a centre marker - so panning is a cheap drawImage, not a re-sample. The
-// expensive one-time build runs at world entry (behind a loading screen, see ui.startGame).
+// / land / biome blocks); each frame just blits a windowed region + draws the viewport quad +
+// a player marker - so panning is a cheap drawImage, not a re-sample. The window is CENTRED on
+// the player only while the world is too big to fit; once an axis can show the whole map it
+// ANCHORS (map static, marker travels) - see drawMinimap. The expensive one-time build runs at
+// world entry (behind a loading screen, see ui.startGame).
 "use strict";
 
 import { G } from "./state.js";
 import { el, canvas } from "./dom.js";
 import { screenToWorld, worldToCell } from "./iso.js";
-import { tileAt, snownessAt, desertAt, iceAt, landHeightAt, wrapCol, wrapRow } from "./cells.js";
+import { tileAt, snownessAt, desertAt, iceAt, landHeightAt, wrapCol, wrapRow, isTilledTile } from "./cells.js";
 import { inBounds } from "./rng.js";
 
 const MM_MAX = 768;                    // max offscreen world-map dimension (caps the one-time build)
@@ -23,7 +25,8 @@ let wm = null, wmW = 0, wmH = 0, wmCpp = 1, wmOc = 0, wmOr = 0, wmSeed = -1;
 let lastCamX = NaN, lastCamY = NaN, lastCamZoom = NaN, lastMmZoom = NaN, lastDw = 0, lastDh = 0, lastWmSeed = -2;
 
 const C_VOID = [10, 16, 30], C_WATER = [33, 67, 110], C_ICE = [120, 160, 205], C_SAND = [200, 176, 121],
-  C_STONE = [107, 114, 128], C_DIRT = [122, 102, 80], C_GRASS = [63, 122, 58], C_SNOW = [223, 232, 240], C_DESERT = [170, 165, 96];
+  C_STONE = [107, 114, 128], C_DIRT = [122, 102, 80], C_GRASS = [63, 122, 58], C_SNOW = [223, 232, 240], C_DESERT = [170, 165, 96],
+  C_TILLED = [101, 78, 53];
 
 // Write the shaded RGBA of cell (c,r) into image data at byte i. Land gets a subtle elevation
 // relief (low ground darker, highlands brighter) for a map-like look. (data is a
@@ -38,6 +41,7 @@ function sampleColor(c, r, data, i) {
       if (t === "sand") col = C_SAND;
       else if (t === "stone") col = C_STONE;
       else if (t === "dirt") col = C_DIRT;
+      else if (isTilledTile(t)) col = C_TILLED;
       else if (G.world.wrapX) col = snownessAt(c, r) > 0.5 ? C_SNOW : (desertAt(c, r) > 0.5 ? C_DESERT : C_GRASS);
       else col = C_GRASS;
       shade = 0.82 + 0.4 * landHeightAt(c, r);
@@ -110,7 +114,7 @@ export function drawMinimap() {
 
   // High-DPI display buffer so the map + indicator stay crisp.
   const dpr = window.devicePixelRatio || 1;
-  const cw0 = cnv.clientWidth || 225, ch0 = cnv.clientHeight || 150; // one layout read each, reused below
+  const cw0 = cnv.clientWidth || 281, ch0 = cnv.clientHeight || 188; // one layout read each, reused below (CSS: .tc-forecast/.tc-minimap)
   const dw = Math.max(1, Math.round(cw0 * dpr)), dh = Math.max(1, Math.round(ch0 * dpr));
   if (cnv.width !== dw || cnv.height !== dh) { cnv.width = dw; cnv.height = dh; }
 
@@ -142,7 +146,16 @@ export function drawMinimap() {
 
   const scale = (wmCpp / cppD) * dpr;                  // world-map pixel -> device pixel
   const srcW = dw / scale, srcH = dh / scale;          // window size in world-map pixels
-  const srcX = (pcc - wmOc) / wmCpp - srcW / 2, srcY = (pcr - wmOr) / wmCpp - srcH / 2;
+  // Per-axis ANCHORING: when the window can show the whole world on an axis,
+  // pin that axis (world centred in the window) and let the MARKER travel
+  // instead - the map only pans on axes where the full map cannot fit. An
+  // infinite world has no full map (the offscreen is a roaming sample around
+  // the player), so it always pans.
+  const anchorX = !G.world.infinite && srcW >= wmW - 0.5;
+  const anchorY = !G.world.infinite && srcH >= wmH - 0.5;
+  const pmx = (pcc - wmOc) / wmCpp, pmy = (pcr - wmOr) / wmCpp; // player in world-map px
+  const srcX = anchorX ? (wmW - srcW) / 2 : pmx - srcW / 2;
+  const srcY = anchorY ? (wmH - srcH) / 2 : pmy - srcH / 2;
 
   ctx.imageSmoothingEnabled = true;                    // smooth (less blocky) terrain scaling
   ctx.fillStyle = "#0a1222"; ctx.fillRect(0, 0, dw, dh);
@@ -154,23 +167,38 @@ export function drawMinimap() {
     for (let ty = tyMin; ty <= tyMax; ty++)
       ctx.drawImage(wm, (tx * wmW - srcX) * scale, (ty * wmH - srcY) * scale, wmW * scale, wmH * scale);
 
-  // Viewport quad, CENTRED on the focus, drawn with a dark halo + bright line so it reads on any
-  // terrain (light or dark).
-  const k2 = dpr / cppD, hx = dw / 2, hy = dh / 2;
-  const cor = [[0, 0], [w, 0], [w, h], [0, h]];
-  ctx.beginPath();
+  // Viewport quad + marker position: the window centre on panning axes, the
+  // player's true map position on anchored ones (the marker walks the map).
+  const k2 = dpr / cppD;
+  const hx = anchorX ? (pmx - srcX) * scale : dw / 2;
+  const hy = anchorY ? (pmy - srcY) * scale : dh / 2;
+  // Quad corner offsets from the focus cell (minimap px), computed once.
+  const cor = [[0, 0], [w, 0], [w, h], [0, h]], qpts = [];
   for (let k = 0; k < 4; k++) {
     const wp = screenToWorld(cor[k][0], cor[k][1]), cell = worldToCell(wp.x, wp.y);
-    const mx = (cell.col - fcol) * k2 + hx, my = (cell.row - frow) * k2 + hy;
-    if (k === 0) ctx.moveTo(mx, my); else ctx.lineTo(mx, my);
+    qpts.push([(cell.col - fcol) * k2, (cell.row - frow) * k2]);
   }
-  ctx.closePath();
-  ctx.lineJoin = "round";
-  ctx.lineWidth = 3 * dpr; ctx.strokeStyle = "rgba(0, 0, 0, 0.5)"; ctx.stroke();
-  ctx.lineWidth = 1.4 * dpr; ctx.strokeStyle = "rgba(255, 255, 255, 0.96)"; ctx.stroke();
-
-  // Centre marker (you-are-here): dark ring + bright dot, always visible even when zoomed out.
+  // On an anchored WRAPPING axis the quad/marker can straddle the wrap seam:
+  // also draw the copies one world-width away so they show on both edges.
+  const xOffs = (anchorX && G.world.wrapX) ? [-wmW * scale, 0, wmW * scale] : [0];
+  const yOffs = (anchorY && G.world.wrapY) ? [-wmH * scale, 0, wmH * scale] : [0];
   const rad = 3 * dpr;
-  ctx.beginPath(); ctx.arc(hx, hy, rad + 1.3 * dpr, 0, 6.2832); ctx.fillStyle = "rgba(0, 0, 0, 0.6)"; ctx.fill();
-  ctx.beginPath(); ctx.arc(hx, hy, rad, 0, 6.2832); ctx.fillStyle = "rgba(255, 210, 80, 0.98)"; ctx.fill();
+  ctx.lineJoin = "round";
+  for (const xo of xOffs) {
+    for (const yo of yOffs) {
+      const qx = hx + xo, qy = hy + yo;
+      // Viewport quad, drawn with a dark halo + bright line so it reads on any terrain.
+      ctx.beginPath();
+      for (let k = 0; k < 4; k++) {
+        const mx = qpts[k][0] + qx, my = qpts[k][1] + qy;
+        if (k === 0) ctx.moveTo(mx, my); else ctx.lineTo(mx, my);
+      }
+      ctx.closePath();
+      ctx.lineWidth = 3 * dpr; ctx.strokeStyle = "rgba(0, 0, 0, 0.5)"; ctx.stroke();
+      ctx.lineWidth = 1.4 * dpr; ctx.strokeStyle = "rgba(255, 255, 255, 0.96)"; ctx.stroke();
+      // Marker (you-are-here): dark ring + bright dot, always visible even zoomed out.
+      ctx.beginPath(); ctx.arc(qx, qy, rad + 1.3 * dpr, 0, 6.2832); ctx.fillStyle = "rgba(0, 0, 0, 0.6)"; ctx.fill();
+      ctx.beginPath(); ctx.arc(qx, qy, rad, 0, 6.2832); ctx.fillStyle = "rgba(255, 210, 80, 0.98)"; ctx.fill();
+    }
+  }
 }

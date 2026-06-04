@@ -8,6 +8,7 @@ import {
   TOPBAR_H, SUBBAR_H,
   TOOL_SCALE, TOOL_SWING_DEG, TOOL_SWING_MS,
   HATCHET_PIVOT_X, HATCHET_PIVOT_Y, PICKAXE_PIVOT_X, PICKAXE_PIVOT_Y,
+  HOE_PIVOT_X, HOE_PIVOT_Y, FARM_CURSOR_SCALE,
 } from "./config.js";
 import { G } from "./state.js";
 import { GD } from "./gamedata.js";
@@ -299,6 +300,7 @@ export function renderFx() {
   let tool = null, pvx = 0, pvy = 0;
   if (G.showHatchet) { tool = G.toolImages[bestToolId(G.world.tools, "hatchet") || "hatchet"]; pvx = HATCHET_PIVOT_X; pvy = HATCHET_PIVOT_Y; }
   else if (G.showPickaxe) { tool = G.toolImages[bestToolId(G.world.tools, "pickaxe") || "pickaxe"]; pvx = PICKAXE_PIVOT_X; pvy = PICKAXE_PIVOT_Y; }
+  else if (G.showHoe) { tool = G.toolImages[bestToolId(G.world.tools, "garden_hoe") || "garden_hoe"]; pvx = HOE_PIVOT_X; pvy = HOE_PIVOT_Y; }
   if (tool && tool.complete && tool.naturalWidth && G.mouse.on) {
     const px = G.mouse.x;                          // canvas coords ->
     const py = G.mouse.y + (TOPBAR_H + SUBBAR_H);  // full-screen coords
@@ -311,6 +313,21 @@ export function renderFx() {
     fxctx.rotate(angle);
     fxctx.drawImage(tool, -pvx * TOOL_SCALE, -pvy * TOOL_SCALE, w, h);
     fxctx.restore();
+  }
+
+  // Static farm cursor (no swing): the pour bucket over a waterable tile, the empty
+  // bucket over water (fill), or a seed pouch over plantable soil. Drawn centred on
+  // the pointer (the OS cursor is hidden while any of these are set).
+  if (G.farmCursor && !tool && G.mouse.on) {
+    let img = null;
+    if (G.farmCursor === "pour") img = G.farmImages.pour;
+    else if (G.farmCursor === "fill") img = G.toolImages.bucket;
+    else if (G.farmCursor === "seeds") img = G.resImages.wheat_seeds;
+    if (img && img.complete && img.naturalWidth) {
+      const px = G.mouse.x, py = G.mouse.y + (TOPBAR_H + SUBBAR_H);
+      const w = img.naturalWidth * FARM_CURSOR_SCALE, h = img.naturalHeight * FARM_CURSOR_SCALE;
+      fxctx.drawImage(img, px - w / 2, py - h / 2, w, h);
+    }
   }
 }
 

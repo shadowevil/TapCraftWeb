@@ -19,8 +19,23 @@ import { updateResourceUI } from "./ui.js";
 import { updateCraftedHud } from "./crafting.js";
 
 const RATE_WINDOW_MS = 15000; // production-rate smoothing window
+const FP_DEFAULT = { w: 2, h: 2 }; // classic footprint for defs without one
 
 export function buildingDef(type) { return GD.buildings[type]; }
+// Footprint {w,h} of a building type (data-driven: 1x1 torch .. 3x3 town hall).
+export function footprintOf(type) {
+  const def = GD.buildings[type];
+  return (def && def.footprint) || FP_DEFAULT;
+}
+// Sprite lift of a building type (sprite px, scaled by zoom) - the building
+// twin of an object's yOffset: raises the art above the front-bottom anchor so
+// small centered art (the 1x1 torch) plants mid-tile instead of hanging below
+// its diamond. Data: def.yOffset; 0 (no lift) when absent, so the classic
+// 2x2 hut art is untouched.
+export function yOffsetOf(type) {
+  const def = GD.buildings[type];
+  return (def && def.yOffset) || 0;
+}
 
 // --- Placement -------------------------------------------------------
 // Every footprint cell must be in-bounds, a placeable tile, free of objects
@@ -29,23 +44,33 @@ export function buildingDef(type) { return GD.buildings[type]; }
 export function canPlaceFootprint(type, col, row) {
   const def = GD.buildings[type];
   if (!def) return false;
+  const fp = footprintOf(type);
   const tiles = def.placeableTiles;
-  for (const [c, r] of buildingCells(col, row)) {
+  for (const [c, r] of buildingCells(col, row, fp.w, fp.h)) {
     if (!inBounds(c, r)) return false;
     if (tiles.indexOf(tileAt(c, r)) < 0) return false;
     if (cellObject(c, r)) return false;            // tree or rock present
   }
   // No overlap with an existing building's footprint.
-  const want = footprintKeys(col, row);
+  const want = footprintKeys(col, row, fp);
   for (const b of G.world.buildings) {
-    for (const k of footprintKeys(b.col, b.row)) if (want.has(k)) return false;
+    for (const k of footprintKeys(b.col, b.row, footprintOf(b.type))) if (want.has(k)) return false;
   }
   return true;
 }
 
+// The cost the NEXT placement of a type will charge: types with buildCostNext
+// (the Town Hall) price the first one cheap and every subsequent one steep.
+export function buildCostFor(type) {
+  const def = GD.buildings[type];
+  if (def.buildCostNext && buildingExists(type)) return def.buildCostNext;
+  return def.buildCost;
+}
+// Generic over the cost map's resources (a torch costs only wood).
 export function canAffordBuilding(type) {
-  const cost = GD.buildings[type].buildCost;
-  return (G.world.wood | 0) >= cost.wood && (G.world.stone | 0) >= cost.stone;
+  const cost = buildCostFor(type);
+  for (const res of Object.keys(cost)) if ((G.world[res] | 0) < cost[res]) return false;
+  return true;
 }
 
 // Place a building at rear-anchor (col,row). Returns the new building or null
@@ -54,14 +79,14 @@ export function placeBuilding(type, col, row, facing) {
   if (G.world.wrapX) col = wrapCol(col); // torus globe: store canonical (wrapped) coords
   if (G.world.wrapY) row = wrapRow(row);
   if (!canPlaceFootprint(type, col, row) || !canAffordBuilding(type)) return null;
-  const cost = GD.buildings[type].buildCost;
-  G.world.wood -= cost.wood;
-  G.world.stone -= cost.stone;
+  const cost = buildCostFor(type);
+  for (const res of Object.keys(cost)) G.world[res] -= cost[res];
   const def = GD.buildings[type];
   const b = {
     id: "b_" + (G.world.tick | 0) + "_" + (G.world.buildings.length + 1),
     type, col, row,
     facing: facing === "SW" ? "SW" : "SE",
+    paid: { ...cost }, // what THIS building actually cost (scaled types refund off this)
     produced: {},   // lifetime stat (resource id -> total ever harvested/smelted)
     stored: {},     // resources held at the building, awaiting collection
   };
@@ -95,13 +120,15 @@ export function demolishBuilding(id) {
   updateCraftedHud();
 }
 
-// Demolishing returns what the building still holds: 50% of its build cost
-// (rounded down), every FULL (non-damaged) tool, and all unused/stored resources.
+// Demolishing returns what the building still holds: 50% of what it actually
+// COST (b.paid - matters for scaled-cost types; old saves fall back to the base
+// buildCost), every FULL (non-damaged) tool, and all unused/stored resources.
 // A partly-worn active tool instance is lost (you can't un-wear it).
 function refundOnDemolish(b) {
   const def = GD.buildings[b.type];
-  for (const res of Object.keys(def.buildCost || {})) {
-    G.world[res] = (G.world[res] | 0) + Math.floor((def.buildCost[res] | 0) * 0.5);
+  const paid = b.paid || def.buildCost || {};
+  for (const res of Object.keys(paid)) {
+    G.world[res] = (G.world[res] | 0) + Math.floor((paid[res] | 0) * 0.5);
   }
   if (def.category === "harvester") {
     if (b.tools) {
@@ -235,17 +262,17 @@ export function findBuilding(id) {
   return G.world.buildings.find((b) => b.id === id) || null;
 }
 
-function footprintKeys(col, row) {
+function footprintKeys(col, row, fp) {
   const set = new Set();
   // Canonical coords so overlap detection holds across both torus seams.
-  for (const [c, r] of buildingCells(col, row)) set.add(wrapCol(c) + "," + wrapRow(r));
+  for (const [c, r] of buildingCells(col, row, fp.w, fp.h)) set.add(wrapCol(c) + "," + wrapRow(r));
   return set;
 }
 
-// World-space center of the 2x2 block (for range checks + panel anchor).
+// World-space center of the footprint block (for range checks + panel anchor).
 export function buildingCenter(b) {
-  const c = cellCenter(b.col + 0.5, b.row + 0.5);
-  return c;
+  const fp = footprintOf(b.type);
+  return cellCenter(b.col + (fp.w - 1) / 2, b.row + (fp.h - 1) / 2);
 }
 
 // --- Targets ---------------------------------------------------------
@@ -265,7 +292,8 @@ function isEligible(targetKind, c, r) {
 // coverage area while placing it. Each entry: {c,r}.
 export function cellsInRange(type, col, row) {
   const radius = GD.buildings[type].harvestRadius;
-  const cx = col + 0.5, cy = row + 0.5;              // 2x2 footprint center
+  const fp = footprintOf(type);
+  const cx = col + (fp.w - 1) / 2, cy = row + (fp.h - 1) / 2; // footprint center
   const r2 = (radius + 0.5) * (radius + 0.5);
   const box = clampBox(Math.floor(cx - radius - 1), Math.ceil(cx + radius + 1),
     Math.floor(cy - radius - 1), Math.ceil(cy + radius + 1));
@@ -284,7 +312,8 @@ export function cellsInRange(type, col, row) {
 export function buildingTargets(b) {
   const def = GD.buildings[b.type];
   const radius = def.harvestRadius;
-  const cx = b.col + 0.5, cy = b.row + 0.5;          // footprint center in cells
+  const fp = footprintOf(b.type);
+  const cx = b.col + (fp.w - 1) / 2, cy = b.row + (fp.h - 1) / 2; // footprint center in cells
   const r2 = (radius + 0.5) * (radius + 0.5);        // +0.5 so edge tiles count
   const box = clampBox(Math.floor(cx - radius - 1), Math.ceil(cx + radius + 1),
     Math.floor(cy - radius - 1), Math.ceil(cy + radius + 1));

@@ -59,6 +59,14 @@
         <img id="tc-gold_coin-icon" src="assets/icons/icon_gold_coin.png" alt="Gold Coin" />
         <span id="tc-gold_coin-count">0</span>
     </div>
+    <div class="tc-resource" title="Wheat Seeds">
+        <img id="tc-wheat_seeds-icon" src="assets/icons/icon_wheat_seeds.png" alt="Wheat Seeds" />
+        <span id="tc-wheat_seeds-count">0</span>
+    </div>
+    <div class="tc-resource" title="Wheat">
+        <img id="tc-wheat-icon" src="assets/icons/icon_wheat.png" alt="Wheat" />
+        <span id="tc-wheat-count">0</span>
+    </div>
     <div id="tc-day-counter" class="tc-day-counter" title="Day">Day 1</div>
 </div>
 
@@ -218,6 +226,7 @@
             <button class="tc-tab" type="button" data-tab="terrain">Terrain</button>
             <button class="tc-tab" type="button" data-tab="biomes">Biomes</button>
             <button class="tc-tab" type="button" data-tab="decoration">Decoration</button>
+            <button class="tc-tab" type="button" data-tab="farming">Farming</button>
             <button class="tc-tab" type="button" data-tab="ambient">Ambient &amp; Weather</button>
         </div>
 
@@ -251,7 +260,7 @@
                     <div class="tc-row">
                         <div class="tc-row-head"><label for="tc-growth">Growth rate</label><span id="tc-growth-val" class="tc-val"></span></div>
                         <input id="tc-growth" class="tc-range" type="range" min="0.1" max="10" step="0.1" value="1" />
-                        <p class="tc-desc">How fast trees and crops mature.</p>
+                        <p class="tc-desc">How fast trees mature. Crops use the Farming tab's Crop growth instead.</p>
                     </div>
                     <div class="tc-row tc-row-wide">
                         <div class="tc-row-head"><label for="tc-seed">Seed</label></div>
@@ -346,6 +355,26 @@
                         <div class="tc-row-head"><label for="tc-decor-cluster">Decoration clustering</label><span id="tc-decor-cluster-val" class="tc-val"></span></div>
                         <input id="tc-decor-cluster" class="tc-range" type="range" min="0" max="100" step="1" value="60" />
                         <p class="tc-desc">How tightly decorations group into patches.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tc-tabpanel" data-panel="farming">
+                <div class="tc-grid">
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-crop-growth">Crop growth</label><span id="tc-crop-growth-val" class="tc-val"></span></div>
+                        <input id="tc-crop-growth" class="tc-range" type="range" min="0.1" max="10" step="0.1" value="1" />
+                        <p class="tc-desc">Growth speed multiplier for planted crops (independent of the tree growth rate).</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-wet-boost">Watering boost</label><span id="tc-wet-boost-val" class="tc-val"></span></div>
+                        <input id="tc-wet-boost" class="tc-range" type="range" min="1" max="5" step="0.1" value="2.5" />
+                        <p class="tc-desc">How much faster crops grow on fully watered soil versus bone dry.</p>
+                    </div>
+                    <div class="tc-row">
+                        <div class="tc-row-head"><label for="tc-seed-chance">Seed drop chance</label><span id="tc-seed-chance-val" class="tc-val"></span></div>
+                        <input id="tc-seed-chance" class="tc-range" type="range" min="0" max="25" step="1" value="5" />
+                        <p class="tc-desc">Chance a foraged grass patch drops wheat seeds.</p>
                     </div>
                 </div>
             </div>

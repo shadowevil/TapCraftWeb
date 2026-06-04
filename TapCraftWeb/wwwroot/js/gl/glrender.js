@@ -3,7 +3,9 @@
 // Draws the whole world (floor tiles + entities + shadows + drops) from the single
 // runtime atlas (atlas.js) as a few instanced draw calls, so a dense scene that used to
 // issue thousands of ctx.drawImage calls on one CPU core becomes a handful of GPU
-// commands. The 2D path in render.js stays intact as a fallback (G.useGL).
+// commands. The game is WebGL-ONLY: the Canvas-2D world fallback was removed (the 2D
+// canvas remains as the overlay layer); boot hard-fails without WebGL2 (main.js), and a
+// lost context pauses the world until `webglcontextrestored` rebuilds the pipeline.
 //
 // TWO instance layers share one shader/atlas:
 //   - FLOOR (cached): rebuilt only when the camera/zoom/water/visible-range changes; the
@@ -137,7 +139,7 @@ function buildPipeline() {
 }
 
 // Initialize on the #tc-gl canvas. Returns true if WebGL2 + pipeline are good (so the
-// caller can flip G.useGL); false -> stay on the 2D renderer.
+// caller can boot the game); false -> main.js shows the WebGL2-required message.
 export function initGL(canvas) {
   glCanvas = canvas;
   if (!glCanvas) return false;
@@ -261,6 +263,14 @@ export function patchFloorUV(idx, u0, v0, u1, v1) {
   const i = idx * FLOATS_PER;
   flr.data[i + 6] = u0; flr.data[i + 7] = v0; flr.data[i + 8] = u1; flr.data[i + 9] = v1;
 }
+// Rewrite one floor instance's tint in place (premultiplied rgba multipliers).
+// The per-tile LIGHT pass uses this every frame clouds/torches are active:
+// tile light = base tint x cloud shade x emitter boost, then one re-upload.
+export function patchFloorTint(idx, r, g, b, a) {
+  if (!ready) return;
+  const i = idx * FLOATS_PER;
+  flr.data[i + 10] = r; flr.data[i + 11] = g; flr.data[i + 12] = b; flr.data[i + 13] = a;
+}
 export function reuploadFloor() {
   if (!ready || flr.count === 0) return;
   gl.bindBuffer(gl.ARRAY_BUFFER, flr.buf);
@@ -283,7 +293,7 @@ export function flush() {
 }
 
 // Day/night + weather tint: fullscreen multiply (RGB *= color), alpha untouched. color
-// components are 0..255 (matching applyEnvTint's pre-blended color).
+// components are 0..255 (the pre-blended color from render.js envTintColor).
 export function drawEnvTint(r, g, b) {
   if (!ready) return;
   gl.useProgram(tintProg);

@@ -1,6 +1,8 @@
-// TapCraft - ambient cosmetic FX: drifting cloud shadows, birds, and bugs.
+// TapCraft - ambient cosmetic FX: drifting clouds, birds, and bugs.
 // PURELY decorative - no gameplay effect, no world interaction. Counts/speeds are
-// data-tuned via GD.ambient.
+// data-tuned via GD.ambient. Clouds are SIMULATED here (drift/recycle/lump shape)
+// but no longer painted: render.js queries cloudShadeAt(c, r) per tile and folds
+// the shade into each tile's (and its object's) RGB light tint.
 //
 // Everything is WORLD-ANCHORED (positioned in world coords, drawn via worldToScreen)
 // so it scrolls with the terrain as you pan; items DESPAWN/recycle once they leave
@@ -22,7 +24,7 @@ import { tileAt, snownessAt } from "./cells.js";
 import { dayAmount, weatherCloud, weatherRain } from "./env.js";
 
 let clouds = [], birds = [], swarms = [], moonbeams = [], inited = false;
-let cloudField = []; // [{ccol,crow,r}] rebuilt each updateAmbient - fast cloud-coverage queries (rain)
+let cloudField = []; // per-frame cloud snapshot (centers + lump + shade) - rain coverage AND tile-shade queries
 let windAng = 0, windTarget = 0, windTimer = 0; // shared cloud wind, EASED toward windTarget; re-rolled on a timer
 let cloudSizeMul = 1; // live per-frame radius scale: clouds swell toward storm-sized as the rain rises (clouds.rainSize)
 
@@ -94,7 +96,23 @@ function offscreen(wx, wy, m) {
   return s.x < -mm || s.x > w + mm || s.y < -mm || s.y > h + mm;
 }
 
-// --- Clouds (world-anchored shadow drawn as darkened iso TILES) ------
+// --- Clouds (world-anchored shade, consumed as per-tile LIGHT LEVELS) ------
+// Clouds are no longer painted as overlay fills: render.js reads cloudShadeAt
+// per tile and darkens the tile's (and its object's) RGB tint instead - the
+// art darkens, nothing is drawn over it.
+
+// Lumpy outline radius-multiplier vs angle for one cloud, computed ONCE at
+// spawn (the phases never change): per-tile shade queries then cost a lookup,
+// not atan2 + two sins. CLOUD_N is a pow2 so the angle index can mask-wrap.
+const CLOUD_N = 128;
+function buildLumpTable(phase, phase2) {
+  const t = new Float32Array(CLOUD_N), PI2 = Math.PI * 2;
+  for (let i = 0; i < CLOUD_N; i++) {
+    const a = (i / CLOUD_N) * PI2 - Math.PI;
+    t[i] = 0.78 + 0.22 * Math.sin(2 * a + phase) + 0.14 * Math.sin(3 * a + phase2);
+  }
+  return t;
+}
 function newCloud(inView) {
   const a = GD.ambient.clouds;
   const rCells = rand(a.minCells, a.maxCells);     // radius in cells (tile footprint)
@@ -104,6 +122,7 @@ function newCloud(inView) {
     alpha: a.alpha * rand(0.55, 1.45),             // per-cloud opacity varies a lot
     phase: rand(0, Math.PI * 2), phase2: rand(0, Math.PI * 2), // lumpy outline
   };
+  c.lump = buildLumpTable(c.phase, c.phase2);      // static per cloud (phases never change)
   const cluster = a.cluster || 0;
   if (cluster > 0 && clouds.length && Math.random() < cluster) {
     // Clustering: drop this cloud near an existing one so they clump into groups
@@ -148,14 +167,47 @@ export function cloudShadowAt(wx, wy) {
   return cover;
 }
 // Snapshot cloud cell-centers once per frame so the per-drop coverage query above
-// doesn't recompute them ~900x. Rebuilt in updateAmbient after the clouds move.
+// and the per-tile shade query below don't recompute them thousands of times.
+// Rebuilt in updateAmbient after the clouds move. Each entry also carries the
+// shade ingredients: the cloud's lump table, its opacity (rain-boosted - storm
+// clouds read darker), and the squared LUMPY max radius for the early reject.
 function rebuildCloudField() {
   cloudField.length = 0;
+  const rainBoost = 1 + weatherRain() * 0.7;
   for (const c of clouds) {
     const r = cloudR(c);
-    cloudField.push({ ccol: c.wx / (2 * HALF_W) + c.wy / (2 * HALF_H), crow: c.wy / (2 * HALF_H) - c.wx / (2 * HALF_W), r, r2: r * r });
+    const maxR = r * 1.15; // just past the max lumpy radius (0.78+0.22+0.14)
+    cloudField.push({
+      ccol: c.wx / (2 * HALF_W) + c.wy / (2 * HALF_H),
+      crow: c.wy / (2 * HALF_H) - c.wx / (2 * HALF_W),
+      r, r2: r * r, maxR2: maxR * maxR,
+      shadeA: Math.min(1, c.alpha * rainBoost), lump: c.lump,
+    });
   }
 }
+// Banded cloud shade 0..1 at tile (c,r) - the per-tile LIGHT-LEVEL input that
+// replaced the painted cloud shadows: same lumpy blob + 3-step falloff the old
+// drawCloud rasterized, but returned as a number for render.js to fold into the
+// tile's RGB tint (floor instance + the object standing on it). Overlapping
+// clouds compound like stacked translucent fills did: 1 - prod(1 - shade).
+const CLOUD_IDX_SCALE = CLOUD_N / (Math.PI * 2);
+export function cloudShadeAt(c, r) {
+  if (!cloudField.length) return 0;
+  let through = 1; // light let through by all clouds
+  for (const f of cloudField) {
+    const ox = c - f.ccol, oy = r - f.crow;
+    const d2 = ox * ox + oy * oy;
+    if (d2 > f.maxR2) continue;                    // far corner -> skip before sqrt/atan2
+    const reff = f.r * f.lump[((Math.atan2(oy, ox) + Math.PI) * CLOUD_IDX_SCALE) & (CLOUD_N - 1)];
+    const d = Math.sqrt(d2);
+    if (d > reff) continue;
+    const lvl = Math.ceil((1 - d / reff) * 3);     // 3 bands (tiled falloff)
+    if (lvl <= 0) continue;
+    through *= 1 - f.shadeA * (Math.min(3, lvl) / 3);
+  }
+  return 1 - through;
+}
+export function cloudsActive() { return cloudField.length > 0; }
 
 // Pick a random cloud currently in view (for a lightning strike). Returns its world
 // position + cell radius, or null if none on screen.
@@ -359,11 +411,13 @@ export function updateAmbient(dtMs) {
 }
 
 // --- Render -----------------------------------------------------------
+// Cloud SHADOWS are no longer painted here: their shade is folded into each
+// tile's light level (cloudShadeAt -> render.js RGB tints), so the floor and
+// the objects on it darken at the pixel level instead of under an overlay fill.
 export function renderAmbient() {
   if (!GD.ambient || !G.hasWorld || !inited) return;
   const z = G.cam.zoom;
-  renderMoonlight();   // UNDER the cloud shadows: clouds dim it, so it reads as moonlight through the GAPS
-  for (const c of clouds) drawCloud(c, z);
+  renderMoonlight();
   for (const s of swarms) { if (s.onLand) for (const b of s.bugs) drawBug(b); }
   for (const bd of birds) drawBird(bd, z);
 }
@@ -371,8 +425,7 @@ export function renderAmbient() {
 // Fake moon/sun beams: short additive light shafts that slant in from the top-right
 // (the object-shadow lean, derived from SHADOW_SKEW/SQUASH so they stay matched) and
 // LAND on a single land tile, with a soft pool that gives that tile a touch more
-// brightness - like a ray cast onto it, not a streak across the whole screen. Drawn
-// BEFORE the cloud shadows (painted next), so a cloud passing over dims the lit tile.
+// brightness - like a ray cast onto it, not a streak across the whole screen.
 // Present day AND night: the colour blends from cool BLUE (night) to warm YELLOW/ORANGE
 // (day) by dayAmount, so as the sun rises the moonbeams become sun rays. World-anchored
 // + drifting (see update), so the pools glide over the terrain as the light source moves.
@@ -426,61 +479,6 @@ function renderMoonlight() {
     ctx.beginPath(); ctx.arc(p.x, p.y, pr, 0, Math.PI * 2); ctx.fill();
   }
   ctx.restore();
-}
-
-// Cloud shadow = darkened floor TILES (iso diamonds) in a lumpy, banded blob, so
-// it mimics the tile grid instead of a smooth circle. Alpha steps in 3 bands
-// (denser center) for a pixel/tile look; the outline is perturbed per cloud.
-//
-// Hot path - this is the heavy-coverage perf sink (clouds x R^2 tiles per frame). It is
-// kept cheap by: (1) precomputing the lumpy-outline radius once per cloud into a small
-// angle table (CLOUD_LUMP) so the per-tile cost is a lookup, not atan2 + two sins; (2)
-// inlining the cell->screen transform (no cellCenter/worldToScreen object allocations per
-// tile); (3) rejecting far corner tiles by SQUARED distance, so sqrt/atan2 run only inside
-// the blob. Look is unchanged bar a tiny angular quantization of the outline.
-const CLOUD_N = 128;                          // angular resolution of the lumpy-outline table (pow2)
-const CLOUD_LUMP = new Float32Array(CLOUD_N); // reused each drawCloud call (no per-call alloc)
-function drawCloud(c, z) {
-  // Anchor the shape to the cloud's CONTINUOUS (fractional) cell position so it
-  // glides smoothly instead of snapping tile-by-tile - each grid-aligned tile's
-  // darkness is a smooth function of its offset from the real cloud position.
-  const fcol = c.wx / (2 * HALF_W) + c.wy / (2 * HALF_H);
-  const frow = c.wy / (2 * HALF_H) - c.wx / (2 * HALF_W);
-  const ccol = Math.round(fcol), crow = Math.round(frow);
-  const R = cloudR(c), hw = HALF_W * z, hh = HALF_H * z, RR = Math.ceil(R) + 1;
-  const camX = G.cam.x, camY = G.cam.y, PI = Math.PI, PI2 = PI * 2;
-  const maxR = R * 1.15, maxR2 = maxR * maxR;   // 1.15 = just past the max lumpy radius (0.78+0.22+0.14)
-  // Lumpy outline radius-multiplier vs angle, computed ONCE per cloud (was per tile).
-  for (let i = 0; i < CLOUD_N; i++) {
-    const a = (i / CLOUD_N) * PI2 - PI;
-    CLOUD_LUMP[i] = 0.78 + 0.22 * Math.sin(2 * a + c.phase) + 0.14 * Math.sin(3 * a + c.phase2);
-  }
-  const idxScale = CLOUD_N / PI2;
-  // Batch the diamonds into 3 alpha-band paths and fill each ONCE (one translucent layer each).
-  const bands = [new Path2D(), new Path2D(), new Path2D()];
-  for (let dr = -RR; dr <= RR; dr++) {
-    for (let dc = -RR; dc <= RR; dc++) {
-      const col = ccol + dc, row = crow + dr;
-      const ox = col - fcol, oy = row - frow;        // continuous offset (cell space)
-      const d2 = ox * ox + oy * oy;
-      if (d2 > maxR2) continue;                      // far corner -> skip before any sqrt/atan2
-      const reff = R * CLOUD_LUMP[((Math.atan2(oy, ox) + PI) * idxScale) & (CLOUD_N - 1)];
-      const d = Math.sqrt(d2);
-      if (d > reff) continue;
-      const lvl = Math.ceil((1 - d / reff) * 3);     // 3 alpha bands (tiled falloff)
-      if (lvl <= 0) continue;
-      const sx = (col - row) * hw + camX, sy = (col + row) * hh + camY; // inlined cell->screen (no alloc)
-      const p = bands[Math.min(3, lvl) - 1];
-      p.moveTo(sx, sy - hh); p.lineTo(sx + hw, sy); p.lineTo(sx, sy + hh); p.lineTo(sx - hw, sy); p.closePath();
-    }
-  }
-  const rainBoost = 1 + weatherRain() * 0.7; // storm clouds read darker when it rains
-  for (let bi = 0; bi < 3; bi++) {
-    const a = c.alpha * ((bi + 1) / 3) * rainBoost;
-    if (a <= 0.004) continue;
-    ctx.fillStyle = "rgba(0, 0, 0, " + a.toFixed(3) + ")";
-    ctx.fill(bands[bi]);
-  }
 }
 
 function drawBug(b) {

@@ -28,6 +28,15 @@ function showDataError() {
   m.textContent = "Failed to load game data. Check your connection and reload.";
   document.body.appendChild(m);
 }
+// Visible hard-fail when WebGL2 is unavailable. The world renders exclusively
+// through WebGL (the Canvas-2D world path was removed); without it the game
+// cannot draw, so stop at boot with a clear message instead of a black screen.
+function showGLError() {
+  const m = document.createElement("div");
+  m.className = "no-script-message";
+  m.textContent = "TapCraft needs WebGL2, which this browser/device has disabled or does not support. Try enabling hardware acceleration or a current browser.";
+  document.body.appendChild(m);
+}
 
 // --- Init -------------------------------------------------------------
 async function init() {
@@ -41,11 +50,14 @@ async function init() {
     return;
   }
 
+  // The game is WebGL-only: create the GL context first and hard-fail with a
+  // visible message if WebGL2 is unavailable (no 2D world fallback anymore).
+  if (!initGL(glCanvas)) {
+    showGLError();
+    return;
+  }
   wireUi();
-  // Create the WebGL2 context before the first resizeCanvas (which sizes #tc-gl + sets the
-  // GL viewport). Falls back to the 2D renderer if WebGL2 is unavailable.
-  const glOk = initGL(glCanvas);
-  resizeCanvas();
+  resizeCanvas(); // sizes #tc-gl + sets the GL viewport
   // Build the audio graph now (GD.sounds is loaded); it stays suspended until
   // the first user gesture (resumeAudio in input.js). Decode sounds in parallel
   // with images - non-blocking, and the game runs fine if any clip fails.
@@ -64,11 +76,10 @@ async function init() {
   loadImages().then(() => {
     buildMasks();
     buildShadows();
-    // Build the single runtime atlas from the now-loaded sprites + baked shadows, upload it
-    // as the GL texture, and enable the WebGL world renderer BY DEFAULT. render() falls back
-    // to the 2D path automatically if WebGL2 is unavailable or the context is lost; the
-    // `gl on/off` console command toggles it (hook for a future Graphics options setting).
-    if (glOk) { const atlas = buildAtlas(); uploadAtlas(atlas); G.useGL = !!atlas; }
+    // Build the single runtime atlas from the now-loaded sprites + baked shadows
+    // and upload it as the GL texture. If the context is lost mid-session,
+    // render() pauses the world with a notice until contextrestored re-uploads.
+    uploadAtlas(buildAtlas());
     showMainMenu();
     requestAnimationFrame(frame);
   });

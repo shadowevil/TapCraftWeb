@@ -18,6 +18,7 @@ import { HALF_W, HALF_H } from "./config.js";
 import { tileAt, stageAt, rockRawAt } from "./cells.js";
 import { weatherRain, weatherKind } from "./env.js";
 import { cloudShadowAt, randomCloudInView } from "./ambient.js";
+import { footprintOf } from "./buildings.js";
 import { setRainAudio, playThunder, setViewSnowAudio } from "./sound.js";
 
 let rainDrops = [], splashes = [], splashAcc = 0;
@@ -52,7 +53,8 @@ function openGround(c, r) {
   if (stageAt(c, r) >= 0) return false;  // a tree (any growth stage) is on this cell
   if (rockRawAt(c, r) >= 0) return false; // a rock / ore vein is on this cell
   for (const bd of G.world.buildings) {
-    if (c >= bd.col && c <= bd.col + 1 && r >= bd.row && r <= bd.row + 1) return false; // 2x2 footprint
+    const fp = footprintOf(bd.type);     // data-driven footprint (1x1 torch .. 4x4 town hall)
+    if (c >= bd.col && c <= bd.col + fp.w - 1 && r >= bd.row && r <= bd.row + fp.h - 1) return false;
   }
   return true;
 }

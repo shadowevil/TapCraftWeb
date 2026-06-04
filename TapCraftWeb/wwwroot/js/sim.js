@@ -22,7 +22,7 @@ import {
   dropHovered, startDropFly, renderFx, bestToolId,
 } from "./resources.js";
 import { advanceCrafting } from "./crafting.js";
-import { updateBuildings } from "./buildings.js";
+import { updateBuildings, footprintOf } from "./buildings.js";
 import { updateWetness } from "./wetness.js";
 import { saveWorld } from "./persistence.js";
 import { setWorldAudioPaused } from "./sound.js";
@@ -96,7 +96,8 @@ function growthTick() {
   for (const b of G.world.buildings) {
     const radius = GD.buildings[b.type].harvestRadius | 0;
     if (radius <= 0) continue;
-    const box = clampBox(b.col - radius, b.col + 1 + radius, b.row - radius, b.row + 1 + radius);
+    const fp = footprintOf(b.type);
+    const box = clampBox(b.col - radius, b.col + fp.w - 1 + radius, b.row - radius, b.row + fp.h - 1 + radius);
     for (let r = box.r0; r <= box.r1; r++) {
       for (let c = box.c0; c <= box.c1; c++) grow(c, r, true, 1);
     }
@@ -195,6 +196,16 @@ export function frame(t) {
   G.lastTime = t;
   if (dt > 250) dt = 250;
   pFps(dt);
+  // Camera glide (Town Hall travel): an eased tween toward the target, advanced
+  // on real time so it works while paused. Cancelled by manual pan/zoom (input.js).
+  if (G.camGlide) {
+    const gl = G.camGlide;
+    let f = (t - gl.t0) / gl.ms;
+    if (f >= 1) { f = 1; G.camGlide = null; }
+    const e = f < 0.5 ? 2 * f * f : 1 - Math.pow(-2 * f + 2, 2) / 2; // easeInOutQuad
+    G.cam.x = gl.x0 + (gl.x1 - gl.x0) * e;
+    G.cam.y = gl.y0 + (gl.y1 - gl.y0) * e;
+  }
   if (G.running && G.hasWorld) {
     G.acc += dt;
     let steps = 0;

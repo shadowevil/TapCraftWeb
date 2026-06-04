@@ -34,6 +34,7 @@ function collectSources() {
   for (const k of Object.keys(G.waterImages)) for (const f of G.waterImages[k]) add(f);
   for (const img of G.stageImages) add(img);
   for (const img of G.treeImages) add(img);
+  for (const img of (G.wheatImages || [])) add(img); // wheat crop stages (farming)
   for (const k of Object.keys(G.oreImages)) for (const img of G.oreImages[k]) add(img);
   for (const img of (G.decorImages || [])) add(img);
   for (const id of Object.keys(G.buildingImages)) {
@@ -41,6 +42,7 @@ function collectSources() {
     for (const f of Object.keys(set2)) add(set2[f]);
   }
   for (const id of Object.keys(G.smokeImages)) for (const img of G.smokeImages[id]) add(img);
+  for (const id of Object.keys(G.lightFrames)) for (const img of G.lightFrames[id]) add(img); // lit-building frames (torch flame)
   for (const k of Object.keys(G.resImages)) add(G.resImages[k]);
   for (const k of Object.keys(G.brokenIcons)) add(G.brokenIcons[k]);
   // Baked shadow silhouettes hang off each source image; add them as their own cells.

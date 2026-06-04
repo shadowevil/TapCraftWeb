@@ -32,6 +32,9 @@ export const G = {
     iron_ingot: 0, // smelted iron ingots
     gold_ingot: 0, // smelted gold ingots
     gold_coin: 0,  // minted gold coins (Coinery; no functional use yet)
+    wheat_seeds: 0, // foraged/returned wheat seeds (planted on tilled soil)
+    wheat: 0,       // harvested wheat
+    tilled: 0,      // live count of tilled tiles (transient; recomputed on load, drives wet-floor refreshes)
     tools: null,   // { hatchet:{count,dura}, pickaxe:{count,dura} } (dura = active instance)
     craft: null,   // { <craftableId>: { remaining, elapsed } } in-progress batches
     buildings: [], // [{ id, type, col, row, facing, produced:{<res>:n} }] placed buildings
@@ -47,17 +50,18 @@ export const G = {
   toolImages: {},         // tool id -> cursor sprite Image (hatchet, pickaxe, ...)
   buildingImages: {},     // building id -> { SE: Image, SW: Image }
   smokeImages: {},        // building id -> [frame Images] (animated effect, e.g. forge smoke)
+  lightFrames: {},        // building id -> [frame Images] (lit-state base sprite, e.g. torch flame)
   brokenIcons: {},        // tool id -> broken-tool Image (floats over an idle hut)
   oreImages: {},          // mineable typeId -> [variant Images] (rock/iron_vein/gold_vein)
 
   cam: { x: 0, y: 0, zoom: 2 },
+  camGlide: null,             // in-flight camera tween { x0,y0,x1,y1,t0,ms } (Town Hall travel); null = none
   viewSnow: 0,                // 0..1 how snowy the current view is (smoothed); fades birds/ambience -> wind + rain -> snow near the frozen biome (globe)
   viewDesert: 0,              // 0..1 how desert the current view is (smoothed); thins rainfall in the hot/dry biome (globe)
   camRestored: false,         // true when loadWorld restored a saved camera (skip fit/spawn)
   pendingPanels: null,        // saved craft/build panel layout from loadWorld, applied in startGame
   running: false,
   hasWorld: false,
-  useGL: false,               // true once the WebGL2 renderer + atlas are ready (else 2D path)
   inMenu: false,
   resumeRunning: false,       // running-state to restore after the menu modal
   pendingDelete: null,        // world queued for delete confirmation
@@ -67,9 +71,13 @@ export const G = {
   hoverTile: null,            // ground tile { col, row } under the cursor
   showHatchet: false,         // true while hovering a choppable (mature) tree
   showPickaxe: false,         // true while hovering a rock
+  showHoe: false,             // true while Shift-hovering tillable ground with a garden hoe owned
+  farmCursor: null,           // static farm cursor over the hovered cell: "pour" | "fill" | "seeds" | null
+  shiftDown: false,           // live Shift key state (tilling modifier)
   harvesting: false,          // true while the harvest button is held
   harvestKind: null,          // locked resource kind for this hold ("tree"|"rock")
   lastHarvestAt: 0,           // animTime of the last harvest tick
+  floorEpoch: 0,              // bumped when tile art/tint changes at runtime (till/revert/wetness); cached floors re-emit on change
 
   // --- Buildings ------------------------------------------------------
   buildMode: null,            // { type, facing } while placing a new building (else null)
@@ -102,6 +110,8 @@ export const G = {
   waterImages: {}, // key -> array of WATER_FRAMES Images
   stageImages: [],
   treeImages: [],
+  wheatImages: [],    // wheat crop stage sprites (farming; index = wheat stage, last = mature)
+  farmImages: {},     // farming cursor icons: { pour } (fill/seeds reuse toolImages/resImages)
   grassVariants: [],  // grass tile sprite variants (index 0 = base grass.png), picked per-cell by biome
   decorImages: [],    // cosmetic ground-cover sprites (flowers/grass patches), drawn as objects
 

@@ -81,6 +81,9 @@ export const ui = {
   weightCloudy: el("tc-weight-cloudy"), weightCloudyVal: el("tc-weight-cloudy-val"),
   weightRain: el("tc-weight-rain"), weightRainVal: el("tc-weight-rain-val"),
   weightStorm: el("tc-weight-storm"), weightStormVal: el("tc-weight-storm-val"),
+  cropGrowth: el("tc-crop-growth"), cropGrowthVal: el("tc-crop-growth-val"),
+  wetBoost: el("tc-wet-boost"), wetBoostVal: el("tc-wet-boost-val"),
+  seedChance: el("tc-seed-chance"), seedChanceVal: el("tc-seed-chance-val"),
   worldType: el("tc-worldtype"), circ: el("tc-circ"), circVal: el("tc-circ-val"),
   seed: el("tc-seed"),
 };

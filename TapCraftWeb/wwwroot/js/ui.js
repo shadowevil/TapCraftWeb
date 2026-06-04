@@ -15,17 +15,17 @@ import {
   optionsModal, audioRowsEl, eventsEl, dayCounterEl,
 } from "./dom.js";
 import { resizeGL } from "./gl/glrender.js";
-import { fitView, buildingAnchor, centerCameraOn, minZoom, visibleCellBounds } from "./iso.js";
+import { fitView, buildingAnchor, centerCameraOn, minZoom, visibleCellBounds, cellCenter } from "./iso.js";
 import { generate } from "./worldgen.js";
 import {
   readWorldsIndex, saveWorld, saveWorldNow, loadWorld, deleteWorld, newWorldId, applyPanels,
 } from "./persistence.js";
 import { setRunning, updatePlayPause } from "./sim.js";
 import { buildWorldMap } from "./minimap.js";
-import { buildCraftPanel, toggleCraftPanel } from "./crafting.js";
+import { buildCraftPanel, toggleCraftPanel, costSpan } from "./crafting.js";
 import {
   findBuilding, demolishBuilding, buildingTargets,
-  producedTotal, productionPerMin, canAffordBuilding,
+  producedTotal, productionPerMin, canAffordBuilding, buildCostFor, footprintOf,
   storedTotal, receiveResources,
   hutToolKind, hutToolCount, effectiveMaxTargets, effectiveSpeedMs,
   hutMovable, poolMovableForHut, depositTool, withdrawTool,
@@ -325,6 +325,11 @@ export function createWorld() {
       rain: intOf(ui.weightRain, "weightRain"),
       storm: intOf(ui.weightStorm, "weightStorm"),
     },
+    // Farming (per-world): crop-only growth multiplier, the full-saturation growth
+    // boost, and the grass-patch seed chance (slider % -> 0..0.25 fraction).
+    cropGrowth: floatOf(ui.cropGrowth, "cropGrowth"),
+    wetBoost: floatOf(ui.wetBoost, "wetBoost"),
+    seedChance: pct(ui.seedChance, "seedChance"),
   };
   G.world.id = newWorldId();
   G.world.name = (nameInput.value || suggestWorldName()).trim() || suggestWorldName();
@@ -425,6 +430,9 @@ export function wireUi() {
   applySliderAttrs(ui.weightCloudy, "weightCloudy");
   applySliderAttrs(ui.weightRain, "weightRain");
   applySliderAttrs(ui.weightStorm, "weightStorm");
+  applySliderAttrs(ui.cropGrowth, "cropGrowth");
+  applySliderAttrs(ui.wetBoost, "wetBoost");
+  applySliderAttrs(ui.seedChance, "seedChance");
   bindSlider(ui.bugs, ui.bugsVal, (v) => `${v}`);
   bindSlider(ui.birds, ui.birdsVal, (v) => `${v}`);
   bindSlider(ui.clouds, ui.cloudsVal, (v) => `${v}`);
@@ -436,6 +444,10 @@ export function wireUi() {
   bindSlider(ui.weightCloudy, ui.weightCloudyVal, (v) => `${v}`);
   bindSlider(ui.weightRain, ui.weightRainVal, (v) => `${v}`);
   bindSlider(ui.weightStorm, ui.weightStormVal, (v) => `${v}`);
+  // Farming sliders (per-world crop tuning; consumed by cells.growFarmCell / farming.js).
+  bindSlider(ui.cropGrowth, ui.cropGrowthVal, (v) => `${Number(v).toFixed(1)}x`);
+  bindSlider(ui.wetBoost, ui.wetBoostVal, (v) => `${Number(v).toFixed(1)}x`);
+  bindSlider(ui.seedChance, ui.seedChanceVal, (v) => `${v}%`);
 
   el("tc-seed-random").addEventListener("click", () => { ui.seed.value = randomSeed(); });
   el("tc-generate").addEventListener("click", createWorld);
@@ -550,8 +562,12 @@ export function clampInt(value, min, max, fallback) {
 }
 
 // --- Build UI: picker, placement, and the world-anchored info panel --------
+// Cost spans are kept per entry so markAffordability can also refresh the
+// NUMBERS: scaled-cost types (the Town Hall) get pricier after the first build.
+let buildCostRefs = {};
 export function buildBuildPanel() {
   buildListEl.innerHTML = "";
+  buildCostRefs = {};
   for (const id of Object.keys(GD.buildings)) {
     const def = GD.buildings[id];
     const row = document.createElement("button");
@@ -569,9 +585,14 @@ export function buildBuildPanel() {
     name.textContent = def.name;
     const cost = document.createElement("div");
     cost.className = "tc-build-cost";
-    cost.innerHTML =
-      `<span class="tc-cost-item"><img src="${GD.resources.wood.icon}" /><span>${def.buildCost.wood}</span></span>` +
-      `<span class="tc-cost-item"><img src="${GD.resources.stone.icon}" /><span>${def.buildCost.stone}</span></span>`;
+    // One span per cost resource (generic: a torch is wood-only), value filled
+    // by markAffordability below so it always shows the CURRENT price.
+    const refs = (buildCostRefs[id] = {});
+    for (const res of Object.keys(buildCostFor(id))) {
+      const cs = costSpan(GD.resources[res].icon);
+      refs[res] = cs.val;
+      cost.append(cs.wrap);
+    }
     mid.append(name, cost);
 
     row.append(img, mid);
@@ -587,12 +608,17 @@ export function buildBuildPanel() {
   }
   markAffordability();
 }
-// Grey entries you cannot afford (non-blocking; placement still validates cost).
+// Grey entries you cannot afford (non-blocking; placement still validates cost)
+// and refresh each entry's price numbers (scaled costs change as you build).
 function markAffordability() {
   const rows = buildListEl.children;
   let i = 0;
   for (const id of Object.keys(GD.buildings)) {
-    if (rows[i]) rows[i].classList.toggle("tc-unaffordable", !canAffordBuilding(id));
+    if (rows[i]) {
+      rows[i].classList.toggle("tc-unaffordable", !canAffordBuilding(id));
+      const cost = buildCostFor(id), refs = buildCostRefs[id];
+      if (refs) for (const res of Object.keys(refs)) refs[res].textContent = cost[res];
+    }
     i++;
   }
 }
@@ -698,6 +724,36 @@ export function updateBuildHint() {
   buildHint.classList.toggle("hidden", !want);
 }
 
+// --- Town Hall travel (H / Shift+H) -----------------------------------------
+// Glide the camera to the next/previous travel-anchor building (data-driven:
+// GD.buildings.<type>.travelAnchor, the Town Hall). The glide is a short
+// eased tween on G.camGlide, advanced by the frame loop (sim.js) and cancelled
+// by any manual pan/zoom so the player always wins.
+const GLIDE_MS = 550;
+let hallIdx = -1;
+export function cycleTownHalls(dir) {
+  if (!G.hasWorld || G.inMenu) return;
+  const halls = G.world.buildings.filter((b) => GD.buildings[b.type] && GD.buildings[b.type].travelAnchor);
+  if (!halls.length) { postEvent("Build a Town Hall to travel with H."); return; }
+  hallIdx = ((hallIdx + dir) % halls.length + halls.length) % halls.length;
+  const b = halls[hallIdx];
+  const fp = footprintOf(b.type);
+  // Torus: glide to the wrapped copy nearest the current view (inline wrapColTo -
+  // importing it from render.js would create a ui<->render cycle).
+  let col = b.col + (fp.w - 1) / 2, row = b.row + (fp.h - 1) / 2;
+  const vb = visibleCellBounds();
+  if (G.world.wrapX) { const n = G.world.cols, ctr = (vb.c0 + vb.c1) / 2; col += Math.round((ctr - col) / n) * n; }
+  if (G.world.wrapY) { const n = G.world.rows, ctr = (vb.r0 + vb.r1) / 2; row += Math.round((ctr - row) / n) * n; }
+  const ctr = cellCenter(col, row);
+  const z = G.cam.zoom;
+  G.camGlide = {
+    x0: G.cam.x, y0: G.cam.y,
+    x1: canvas.clientWidth / 2 - ctr.x * z,
+    y1: canvas.clientHeight / 2 - ctr.y * z,
+    t0: G.animTime, ms: GLIDE_MS,
+  };
+}
+
 // Callbacks used by input.js after a placement/selection happens.
 export function onBuildingPlaced(b) { saveWorld(); }
 export function onBuildingSelected(b) {
@@ -724,6 +780,9 @@ export function showBuildingPanel(b) {
     // Forge has its own per-ingot Receive buttons (built in buildForgeRows).
   } else {
     el("tc-bpanel-icon").src = def.sprites.SE; // building thumbnail
+    // Categories with no live body (civic town hall, light torch) show a static
+    // data-driven flavor line in the shared Status row.
+    el("tc-bpanel-status").textContent = def.statusText || "";
   }
   // Show only the rows for this category.
   setPanelCategory(cat);
@@ -764,7 +823,8 @@ export function positionBuildingPanel() {
     if (G.world.wrapX) { const n = G.world.cols, ctr = (bb.c0 + bb.c1) / 2; acol = b.col + Math.round((ctr - b.col) / n) * n; }
     if (G.world.wrapY) { const n = G.world.rows, ctr = (bb.r0 + bb.r1) / 2; arow = b.row + Math.round((ctr - b.row) / n) * n; }
   }
-  const a = buildingAnchor(acol, arow);
+  const fpB = footprintOf(b.type);
+  const a = buildingAnchor(acol, arow, fpB.w, fpB.h);
   const scale = Math.min(1.6, Math.max(0.8, G.cam.zoom / 2));
   buildingPanel.style.left = a.x + "px";
   buildingPanel.style.top = (a.y + (TOPBAR_H + SUBBAR_H)) + "px";
