@@ -71,6 +71,7 @@ export const G = {
   hoverTile: null,            // ground tile { col, row } under the cursor
   showHatchet: false,         // true while hovering a choppable (mature) tree
   showPickaxe: false,         // true while hovering a rock
+  showGrab: false,            // true while hovering/holding a hand-gatherable pickup (logs, small fieldstone)
   showHoe: false,             // true while Shift-hovering tillable ground with a garden hoe owned
   farmCursor: null,           // static farm cursor over the hovered cell: "pour" | "fill" | "seeds" | null
   shiftDown: false,           // live Shift key state (tilling modifier)
@@ -112,6 +113,7 @@ export const G = {
   treeImages: [],
   wheatImages: [],    // wheat crop stage sprites (farming; index = wheat stage, last = mature)
   farmImages: {},     // farming cursor icons: { pour } (fill/seeds reuse toolImages/resImages)
+  grabFrames: [],     // animated grab-hand cursor frames (hand-gatherable pickups)
   grassVariants: [],  // grass tile sprite variants (index 0 = base grass.png), picked per-cell by biome
   decorImages: [],    // cosmetic ground-cover sprites (flowers/grass patches), drawn as objects
 

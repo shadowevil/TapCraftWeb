@@ -1,5 +1,5 @@
 {
-  "version": 84,
+  "version": 89,
 
   "tiles": {
     "grass": { "src": "assets/tiles/grass.png" },
@@ -51,13 +51,17 @@
         "assets/objects/tree_1.png",
         "assets/objects/tree_2.png"
       ],
-      "yOffset": 8
+      "yOffset": 8,
+      "spread": { "radius": 3, "avgMinutes": 16, "maxNeighbors": 3, "buildingClearance": 5 },
+      "_noteEcology": "felled trees are GONE (no regrow); spreading is the only replenishment. spread: a MATURE tree seeds a sprout into a random cell within `radius` tiles about once per `avgMinutes` real minutes (target must be bare grass, no rock/bush, and have at most `maxNeighbors` trees in its 8-neighborhood - the density cap keeps forests from filling solid). buildingClearance: no propagation within this many tiles (Chebyshev - diagonals count) of ANY placed building, in EITHER direction - a source that close never seeds and a target that close never takes root; existing flora simply persists. Only runs inside the growth priority bands / building radii (ecology.js)."
     },
     "rock": {
+      "name": "Rock",
       "targetable": true,
       "drop": "stone",
       "tool": "pickaxe",
       "toughness": 1,
+      "stock": 1000,
       "placeableOn": { "tile": "grass", "requireInterior": false },
       "variantSprites": [
         "assets/objects/rock_1.png",
@@ -66,14 +70,19 @@
         "assets/objects/rock_small_2.png"
       ],
       "variantYOffset": { "2": 12, "3": 14 },
-      "yOffset": 10
+      "variantStock": { "2": 25, "3": 25 },
+      "variantToughness": { "2": 0, "3": 0 },
+      "yOffset": 10,
+      "_noteEcology": "stock = total resource units this mineable yields over its life; at 0 it is removed permanently (no respawn, no spreading). Remaining stock is a per-cell save delta (e.ms) and shows in the cursor tooltip on hover. variantStock/variantToughness override per sprite variant: the SMALL rocks (variants 2/3) hold only 25 stone but are toughness 0 - soft enough that bare hands get the over-sharp bonus (easy early-game stone before the first pickaxe)."
     },
     "iron_vein": {
+      "name": "Iron Vein",
       "targetable": true,
       "drop": "iron",
       "tool": "pickaxe",
       "toughness": 2,
       "minCount": 1,
+      "stock": 1000,
       "placeableOn": { "tile": "grass", "requireInterior": false },
       "variantSprites": [
         "assets/objects/iron_ore_vein_1.png"
@@ -81,11 +90,13 @@
       "yOffset": 8
     },
     "gold_vein": {
+      "name": "Gold Vein",
       "targetable": true,
       "drop": "gold",
       "tool": "pickaxe",
       "toughness": 3,
       "minCount": 1,
+      "stock": 1000,
       "placeableOn": { "tile": "grass", "requireInterior": false },
       "variantSprites": [
         "assets/objects/gold_ore_vein_1.png"
@@ -105,12 +116,34 @@
       "stageYOffset": { "0": 16 },
       "_note": "crop planted on tilled_3 soil (farming.js). Stage index = mods st on the tilled cell; the LAST stage is mature and harvests in one bare-hand click. No `tool`: hands always work. stageYOffset = per-stage render lift override keyed by stage index (the small seedling sits higher), falling back to yOffset."
     },
+    "logs": {
+      "name": "Fallen Logs",
+      "targetable": true,
+      "drop": "wood",
+      "toughness": 0,
+      "stock": 1,
+      "dropChance": 1.0,
+      "output": 1,
+      "variantStock": { "4": 2 },
+      "variantOutput": { "4": 2 },
+      "variantSprites": [
+        "assets/objects/log_1.png",
+        "assets/objects/log_2.png",
+        "assets/objects/log_3.png",
+        "assets/objects/log_4.png",
+        "assets/objects/logs.png"
+      ],
+      "variantYOffset": { "1": 12, "2": 12, "4": 12 },
+      "yOffset": 8,
+      "_note": "hand-gathered wood lying through forests (mineable typeIndex 3; scatter knobs in worldgen.logs). toughness 0 = bare hands work (no `tool`, so gathering never burns durability); dropChance 1 + output = SURE drop: variants 0-3 (single logs) give 1 wood and vanish, variant 4 (the pile) gives 2. stock == output so one gather takes the whole thing."
+    },
     "grass_patch": {
       "targetable": true,
       "drop": "wheat_seeds",
       "dropChance": 0.05,
       "decorSprites": [5, 6],
-      "_note": "forageable version of the grass-patch ground decor: decorSprites = indices into worldgen.decor.sprites that become CLICKABLE objects (one click clears the patch, dropChance to drop seeds). Other decor stays cosmetic."
+      "spread": { "radius": 3, "avgMinutes": 16, "maxNeighbors": 2, "buildingClearance": 5 },
+      "_note": "forageable version of the grass-patch ground decor: decorSprites = indices into worldgen.decor.sprites that become CLICKABLE objects (one click clears the patch, dropChance to drop seeds). Other decor stays cosmetic. Foraged patches never come back in place; `spread` works like the tree's (a live patch spawns a new one nearby, recorded as a per-cell e.dsp save delta, recolonizing foraged cells but never covering flowers/snow/desert; buildingClearance blocks propagation near placed buildings, both as source and target)."
     }
   },
 
@@ -171,21 +204,31 @@
     "baseSharpness": 1,
     "underSharpMult": 0.25,
     "overSharpMult": 1.5,
-    "failGap": 2
+    "failGap": 2,
+    "grabCursor": {
+      "frames": [
+        "assets/icons/cursor_grab_1.png",
+        "assets/icons/cursor_grab_2.png",
+        "assets/icons/cursor_grab_3.png"
+      ],
+      "frameMs": 160,
+      "_note": "animated grab-hand cursor shown while hovering/holding any hand-gatherable pickup (toughness-0 mineables: fallen logs, small fieldstone). Cycles frames every frameMs; frames that fail to load are skipped."
+    }
   },
 
   "crafting": {
     "craftMs": 3000,
     "craftMax": 25,
     "blacksmithSpeedMult": 0.6,
+    "_noteRequires": "every tool needs a crafting hub: stone-tier recipes require a Town Hall, iron-tier the Blacksmith. The craft panel shows locked recipes as 'Needs <building>'. (Note kept OUTSIDE `recipes` - the panel iterates that map's keys as recipe ids.)",
     "recipes": {
-      "stone_hatchet": { "tool": "hatchet", "cost": { "wood": 10, "stone": 5 } },
-      "stone_pickaxe": { "tool": "pickaxe", "cost": { "wood": 10, "stone": 3 } },
+      "stone_hatchet": { "tool": "hatchet", "cost": { "wood": 10, "stone": 5 }, "requires": "town_hall" },
+      "stone_pickaxe": { "tool": "pickaxe", "cost": { "wood": 10, "stone": 3 }, "requires": "town_hall" },
       "iron_hatchet": { "tool": "iron_hatchet", "cost": { "iron_ingot": 5, "wood": 10 }, "requires": "blacksmith" },
       "iron_pickaxe": { "tool": "iron_pickaxe", "cost": { "iron_ingot": 5, "wood": 10 }, "requires": "blacksmith" },
-      "stone_garden_hoe": { "tool": "garden_hoe", "cost": { "wood": 10, "stone": 2 } },
+      "stone_garden_hoe": { "tool": "garden_hoe", "cost": { "wood": 10, "stone": 2 }, "requires": "town_hall" },
       "iron_garden_hoe": { "tool": "iron_garden_hoe", "cost": { "iron_ingot": 3, "wood": 10 }, "requires": "blacksmith" },
-      "bucket": { "tool": "bucket", "cost": { "wood": 20, "stone": 5 } }
+      "bucket": { "tool": "bucket", "cost": { "wood": 20, "stone": 5 }, "requires": "town_hall" }
     }
   },
 
@@ -378,6 +421,12 @@
       "mountainOreMul": 1.7,
       "highlandOreMul": 0.7,
       "_note": "genVersion>=3: rock + ore live on ROCKY ground. mountainShare = top fraction of the HIGHLAND that becomes a solid-stone PEAK (vs foothill). *RockMul/*OreMul scale the rock/ore fill per zone (x the rockDensity/mineral sliders): mountain peaks + foothills get the BIG rock boulders (variants 0-1) + ore, while open GROUND (grass + sand) and a desert oasis get gentle small-rock FIELDSTONE (variants 2-3 = rock_small_*, no ore). Open desert is barren. Older worlds (genVersion<3) keep the legacy grass scatter."
+    },
+    "logs": {
+      "density": 0.02,
+      "minForest": 0.55,
+      "pileChance": 0.25,
+      "_note": "fallen-log scatter (objects.logs): on grass cells whose FOREST noise exceeds minForest (so logs lie where woods grow; they occupy would-be tree cells), `density` chance each. pileChance = share that are the 2-wood pile (variant 4) instead of a 1-wood single log. Applies to ALL worlds (purely additive - existing rocks/trees keep their spots, a sparse few former tree cells now hold a log instead)."
     },
 
     "genVersion": 3,

@@ -18,11 +18,12 @@ import { updateWeather } from "./weather.js";
 import { updateEnv } from "./env.js";
 import { objectAt, render } from "./render.js";
 import {
-  doHarvest, spawnDrop, flushPopDrop, collectDrop,
+  doHarvest, harvestCategory, spawnDrop, flushPopDrop, collectDrop,
   dropHovered, startDropFly, renderFx, bestToolId,
 } from "./resources.js";
 import { advanceCrafting } from "./crafting.js";
 import { updateBuildings, footprintOf } from "./buildings.js";
+import { maybeSpread } from "./ecology.js";
 import { updateWetness } from "./wetness.js";
 import { saveWorld } from "./persistence.js";
 import { setWorldAudioPaused } from "./sound.js";
@@ -57,8 +58,13 @@ function growthTick() {
 
   // One keyed lookup per cell (see cells.growCell), down from four. AMORTIZED bands
   // pass their precomputed gain (expectedGain * period); EXACT bands derive gain
-  // from growthStep inside the helper.
-  const grow = (c, r, exact, mult) => growCell(c, r, mature, stageFull, expectedGain * mult, exact, t, seed, g);
+  // from growthStep inside the helper. growCell's returned stage feeds the
+  // ecology spread hook (mature tree = seed source, empty cell = bush source);
+  // `mult` scales the spread odds the same way it scales growth, so the rate is
+  // band-independent.
+  const grow = (c, r, exact, mult) => {
+    maybeSpread(c, r, growCell(c, r, mature, stageFull, expectedGain * mult, exact, t, seed, g), mult);
+  };
 
   // Priority radius around the viewport CENTER: band 0 (period 1, exact growth) is
   // a capped disc; each outer band is a lower-frequency ring radiating outward;
@@ -116,15 +122,16 @@ export function updateAnimations(dtMs) {
   // Disabled while paused (G.running) - no harvesting when the sim is stopped.
   if (G.running && G.harvesting && G.mouse.on && !G.inMenu) {
     // Cadence from the best owned tool of the held kind (trees -> hatchet,
-    // mining -> pickaxe); bare hands use baseSwingMs.
-    const kind = G.harvestKind === "mine" ? "pickaxe" : "hatchet";
-    const toolId = bestToolId(G.world.tools, kind);
+    // mining -> pickaxe); "hand" holds (toughness-0 pickups) and bare hands
+    // use baseSwingMs.
+    const kind = G.harvestKind === "mine" ? "pickaxe" : G.harvestKind === "tree" ? "hatchet" : null;
+    const toolId = kind ? bestToolId(G.world.tools, kind) : null;
     const interval = toolId ? GD.tools[toolId].swingMs : GD.harvest.baseSwingMs;
     if (G.animTime - G.lastHarvestAt >= interval) {
       const obj = objectAt(G.mouse.x, G.mouse.y);
-      // Same category as the hold (any vein/rock = "mine"; mature tree = "tree").
-      const cat = obj ? (obj.mineable ? "mine" : "tree") : null;
-      if (obj && cat === G.harvestKind) doHarvest(obj);
+      // Same category as the hold (shared classifier - keeps "hand" pickups
+      // from chaining into rock mining mid-drag and vice versa).
+      if (obj && harvestCategory(obj) === G.harvestKind) doHarvest(obj);
       G.lastHarvestAt = G.animTime;
     }
   }
@@ -141,13 +148,15 @@ export function updateAnimations(dtMs) {
   // Crafting: advance each in-progress batch; produce one finished tool every
   // CRAFT_MS (sequential). Runs even while paused / panel closed.
   advanceCrafting(dtMs);
-  // Felling timer: reliably reverts a chopped tree to a sprout, independent
-  // of the pop animation (which fast clicking would otherwise keep restarting).
+  // Felling timer: removes a chopped tree FOR GOOD (stage -1 = bare ground;
+  // ecology.js spreading is the only way trees come back - deforestation is
+  // real). Runs on its own timer, independent of the pop animation (which fast
+  // clicking would otherwise keep restarting).
   for (const [key, t] of G.chopResets) {
     if (G.animTime < t) continue;
     flushPopDrop(key); // make sure the felling click's drop still emits
     const ci = key.indexOf(","), col = +key.slice(0, ci), row = +key.slice(ci + 1);
-    setStage(col, row, 0);
+    setStage(col, row, -1);
     setProgress(col, row, 0);
     setChop(col, row, 0);
     G.chopResets.delete(key);

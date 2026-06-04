@@ -23,7 +23,7 @@ import { inBounds } from "./rng.js";
 import {
   tileAt, stageAt, isTilledTile, tilledStageOf, wheatMature,
   setTilled, plantAt, clearCropAt,
-  decorAt, decorClearedAt, setDecorCleared,
+  decorIdxAt, setDecorCleared,
   wrapCol, wrapRow,
 } from "./cells.js";
 import { mineableAt } from "./mineable.js";
@@ -57,8 +57,9 @@ function bucketsOwned() {
 }
 
 // True when any cell of a placed building's footprint covers (c,r). The list is
-// small and this only runs on clicks / single-cell hover probes.
-function underBuilding(c, r) {
+// small and this only runs on clicks / single-cell hover probes / rare spread
+// attempts (ecology.js imports it for seed-target eligibility).
+export function underBuilding(c, r) {
   const list = G.world.buildings;
   if (!list || !list.length) return false;
   const cc = wrapCol(c), rr = wrapRow(r);
@@ -72,17 +73,18 @@ function underBuilding(c, r) {
 }
 
 // The forageable grass-patch decor index occupying this cell, or -1. Mirrors the
-// render rule for cosmetic decor (bare grass only, hidden under buildings), plus
-// the cleared flag - so hit-testing, rendering and tilling always agree.
+// render rule for cosmetic decor (bare grass only, hidden under buildings) - so
+// hit-testing, rendering and tilling always agree. Reads the EFFECTIVE decor
+// (decorIdxAt): spread-spawned bushes are forageable, foraged cells are not.
 export function patchAt(c, r) {
   const gp = GD.objects && GD.objects.grass_patch;
   if (!gp || !gp.targetable) return -1;
   if (tileAt(c, r) !== "grass" || stageAt(c, r) >= 0 || mineableAt(c, r)) return -1;
-  const di = decorAt(c, r);
+  const di = decorIdxAt(c, r);
   if (di < 0) return -1;
   const list = gp.decorSprites || [];
   if (list.indexOf(di) < 0) return -1;
-  if (decorClearedAt(c, r) || underBuilding(c, r)) return -1;
+  if (underBuilding(c, r)) return -1;
   return di;
 }
 
@@ -135,27 +137,46 @@ function tryPlant(c, r) {
   return true;
 }
 
+// Per-INSTANCE bucket wear: each bucket stack carries `duras` - the remaining
+// uses of every bucket in it, TOP (index 0) = the active one (the HUD shows
+// only that). {count, dura} stays the authoritative shape every other consumer
+// reads; dura mirrors duras[0]. The array is lazily (re)built whenever it
+// disagrees with count - old saves, freshly crafted buckets, console addtool -
+// keeping the shown top durability and treating the rest as fresh.
+function bucketDuras(stack, toolId) {
+  if (!stack.duras || stack.duras.length !== (stack.count | 0)) {
+    const full = toolDurabilityFor(toolId);
+    stack.duras = [];
+    for (let i = 0; i < (stack.count | 0); i++) {
+      stack.duras.push(i === 0 ? ((stack.dura | 0) || full) : full);
+    }
+  }
+  return stack.duras;
+}
+
 // Use the ACTIVE bucket of `fromId` for one action (fill or pour, 1 use each) and
-// move it - carrying its remaining uses - onto the other stack. A bucket on its
+// move it - CARRYING its remaining uses - onto the other stack, where it becomes
+// the new active instance (you pour the bucket you just filled). A bucket on its
 // last use WEARS OUT on this action instead: it is gone and nothing arrives.
 // Returns true when a bucket (with uses left) actually landed on `toId`.
-// NOTE: a moved bucket only stays the wear-tracked ACTIVE instance when the
-// destination stack was empty; behind an existing active it is treated as fresh
-// when promoted. With 100 uses per bucket the drift is negligible.
 function shiftBucket(fromId, toId) {
   const tools = G.world.tools;
   const from = tools[fromId];
   if (!from || from.count <= 0) return false;
-  const usesLeft = (from.dura | 0) - 1;                          // after this action
+  const fd = bucketDuras(from, fromId);
+  const usesLeft = (fd[0] | 0) - 1;                              // after this action
+  fd.shift();
   from.count -= 1;
-  from.dura = from.count > 0 ? toolDurabilityFor(fromId) : 0;    // next one is fresh
+  from.dura = from.count > 0 ? fd[0] : 0;                        // next instance keeps ITS wear
   let arrived = false;
   if (usesLeft <= 0) {
     postEvent(bucketsOwned() > 0 ? "A bucket wore out." : "Your last bucket wore out.");
   } else {
     const to = tools[toId] || (tools[toId] = { count: 0, dura: 0 });
+    const td = bucketDuras(to, toId);                            // repair BEFORE the push (length == count)
+    td.unshift(usesLeft);                                        // moved bucket goes on top (active)
     to.count += 1;
-    if (to.count === 1) to.dura = usesLeft;
+    to.dura = td[0];
     arrived = true;
   }
   updateCraftedHud();

@@ -178,8 +178,10 @@ function doSave() {
     // Terrain is procedural - we save the seed + settings, NOT the cells. Only the
     // sparse map of modified cells (G.world.mods) is persisted, so even an infinite
     // world's save stays small (it grows only with what the player changes).
+    // v16: ecology - mods entries may carry e.ms (mineable stock remaining) and
+    // e.dsp (spread-spawned decor); both optional, so v15 saves load unchanged.
     localStorage.setItem(worldKey(G.world.id), JSON.stringify({
-      version: 15, id: G.world.id, name: G.world.name,
+      version: 16, id: G.world.id, name: G.world.name,
       infinite: G.world.infinite, cols: G.world.cols, rows: G.world.rows, seed: G.world.seed,
       settings: G.world.settings,
       landThreshold: G.world.landThreshold, spawn: G.world.spawn,

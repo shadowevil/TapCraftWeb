@@ -198,14 +198,23 @@ export function buildCraftPanel() {
     button.addEventListener("click", () => startCraft(id, +slider.value));
   }
 
-  // Queue list: stacked-by-type, each row shows count + progress; hover to
-  // cancel the pending units (the in-progress one always finishes).
+  // Queue: stacked-by-type, each row shows count + progress; click cancels the
+  // pending units (the in-progress one always finishes). PINNED as a footer BAR
+  // at the bottom of the panel - OUTSIDE the scrollable recipe list - so it
+  // stays visible no matter how long the list grows or where it is scrolled.
+  // Rebuilt with the panel (idempotent: drop any previous bar + its rows).
+  const oldBar = craftPanel.querySelector(".tc-craft-queue-bar");
+  if (oldBar) oldBar.remove();
+  G.queueItems = {}; // any old rows died with the previous bar
+  G.craftQueueBar = document.createElement("div");
+  G.craftQueueBar.className = "tc-craft-queue-bar";
   G.craftQueueHead = document.createElement("div");
   G.craftQueueHead.className = "tc-queue-head";
   G.craftQueueHead.textContent = "Queue";
   G.craftQueueEl = document.createElement("div");
   G.craftQueueEl.className = "tc-craft-queue";
-  craftListEl.append(G.craftQueueHead, G.craftQueueEl);
+  G.craftQueueBar.append(G.craftQueueHead, G.craftQueueEl);
+  craftPanel.appendChild(G.craftQueueBar);
 
   updateCraftPanel();
 }
@@ -295,7 +304,8 @@ export function updateCraftQueue() {
       delete G.queueItems[id];
     }
   }
-  G.craftQueueHead.style.display = any ? "" : "none";
+  // The whole footer bar hides while nothing is queued (no dead strip).
+  if (G.craftQueueBar) G.craftQueueBar.style.display = any ? "" : "none";
 }
 
 export function updateCraftedHud() {

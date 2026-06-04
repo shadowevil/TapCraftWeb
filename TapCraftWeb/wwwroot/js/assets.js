@@ -221,6 +221,10 @@ export function loadImages() {
   }
   // Bucket pour cursor (drawn on the FX overlay while hovering a waterable tile).
   if (GD.tools.bucket_water && GD.tools.bucket_water.pourIcon) queue(G.farmImages, "pour", GD.tools.bucket_water.pourIcon);
+  // Animated grab-hand cursor (hand-gatherable pickups: fallen logs, small fieldstone).
+  G.grabFrames = [];
+  const grabC = GD.harvest && GD.harvest.grabCursor;
+  if (grabC && grabC.frames) grabC.frames.forEach((src, i) => queue(G.grabFrames, i, src));
   // Grass tile variants (biome-selected per cell; index 0 = base grass.png).
   const grassVariants = (GD.worldgen.grass && GD.worldgen.grass.variants) || [];
   G.grassVariants = [];

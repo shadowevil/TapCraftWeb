@@ -16,8 +16,8 @@ import { playSfx, playBuildingSfx } from "./sound.js";
 import { fxctx } from "./dom.js";
 import { resourceBarEl, resourceIconEl } from "./dom.js";
 import { cellCenter, worldToScreen } from "./iso.js";
-import { mineableAt } from "./mineable.js";
-import { stageAt, chopAt, setChop } from "./cells.js";
+import { mineableAt, mineableStockOf, mineableToughnessOf, mineableOutputOf } from "./mineable.js";
+import { stageAt, chopAt, setChop, mineableStockAt, setMineableStock, setRockRaw } from "./cells.js";
 import { updateResourceUI, postEvent } from "./ui.js";
 import { updateCraftedHud } from "./crafting.js";
 
@@ -94,14 +94,14 @@ export function sharpnessMult(sharpness, toughness) {
 }
 
 // Drop-chance multiplier for an actual swing, accounting for bare hands. A TOOL
-// uses the normal sharpness-vs-toughness curve. BARE HANDS, however, can only
-// harvest objects no tougher than bare-hand sharpness (wood/stone, toughness 1) -
-// ore veins (toughness 2+) always need a tool, even though a stone tool shares the
-// same sharpness number. Returns 0 (fail) for too-tough-for-hands.
+// uses the normal sharpness-vs-toughness curve. BARE HANDS only work SOFT
+// objects (toughness 0: small fieldstones, fallen logs) - anything tougher
+// (trees, full rocks, ore veins) needs a real tool, stone tier up. Returns 0
+// (fail) when hands face toughness 1+.
 export function effectiveMult(toolId, sharpness, toughness) {
   const h = GD.harvest;
   if (!toolId) {
-    if ((toughness | 0) > (h.baseSharpness | 0)) return 0; // hands can't work ore veins
+    if ((toughness | 0) > 0) return 0; // hands only gather soft (toughness 0) objects
     return sharpnessMult(h.baseSharpness | 0, toughness);
   }
   return sharpnessMult(sharpness, toughness);
@@ -110,12 +110,22 @@ export function effectiveMult(toolId, sharpness, toughness) {
 // One harvest swing's yield for an object kind (pure: no durability side effect -
 // the caller spends it). `toolId` is the specific tool used (null = bare hands).
 // The chance is scaled by tool sharpness vs object toughness, and is zero when
-// the object is too tough for the tool (2+ toughness gap).
-export function harvestRoll(objKind, toolId, sharpness) {
+// the object is too tough for the tool (2+ toughness gap). `ov` lets variant-
+// aware callers override per swing: { toughness } (small soft rocks), and
+// { chance, output } for sure-drop objects (fallen logs: chance 1, fixed yield)
+// which replace the tool/hands roll entirely.
+export function harvestRoll(objKind, toolId, sharpness, ov) {
   const h = GD.harvest;
-  const toughness = GD.objects[objKind].toughness || 1;
+  const toughness = (ov && ov.toughness != null) ? ov.toughness
+    : (GD.objects[objKind].toughness != null) ? GD.objects[objKind].toughness : 1; // != null: toughness 0 = hand-gatherable
+
   const mult = effectiveMult(toolId, sharpness, toughness);
   if (mult <= 0) return 0; // too tough for this tool/hands
+  if (ov && (ov.chance != null || ov.output != null)) {
+    const c = Math.min(1, (ov.chance != null ? ov.chance : (toolId ? GD.tools[toolId].dropChance : h.baseDropChance)) * mult);
+    const o = (ov.output != null) ? ov.output : (toolId ? GD.tools[toolId].output : h.baseOutput);
+    return Math.random() < c ? o : 0;
+  }
   if (toolId) {
     const tool = GD.tools[toolId];
     return Math.random() < tool.dropChance * mult ? tool.output : 0;
@@ -167,6 +177,11 @@ export function harvestTree(col, row, opts) {
   flushPopDrop(key); // don't lose the pending drops from a still-running pop
   hitSound("hit_wood", opts);
   const { toolId, sharpness } = resolveTooled("tree", opts);
+  // Bare hands cannot chop a tree any more (toughness 1 needs a real tool) -
+  // tell the player why nothing is happening (manual swings only).
+  if (!toolId && !(opts && opts.building)) {
+    postEvent("You need a hatchet to chop trees.");
+  }
   const dropCount = harvestRoll("tree", toolId, sharpness);
   // Felling only progresses on a SUCCESSFUL hit: a swing that yields no wood
   // still plays the hit/pop, but doesn't count toward chopping the tree down -
@@ -187,25 +202,59 @@ export function harvestTree(col, row, opts) {
 }
 
 // Strike a mineable (rock / iron vein / gold vein): it "pops" and may drop its
-// resource (chance scaled by tool sharpness vs the object's toughness). Infinite
-// - never removed. A too-tough strike still pops + clinks but yields nothing.
+// resource (chance scaled by tool sharpness vs the object's toughness). FINITE:
+// each mineable holds a stock pool (data: def.stock, e.g. 1000); every yielded
+// unit depletes it and at 0 the mineable is REMOVED for good (mined out - no
+// respawn, no spreading). A too-tough strike still pops + clinks but yields
+// nothing and costs no stock.
 export function harvestMineable(col, row, opts) {
   const m = mineableAt(col, row);
   if (!m) return 0;
   const def = GD.objects[m.typeId];
   const key = cellKey(col, row);
   flushPopDrop(key);
-  hitSound("hit_stone", opts); // TODO: dedicated "too tough" clink when 0 yield
-  const { toolId, sharpness } = resolveTooled(m.typeId, opts);
+  // Variant-aware stats: small surface rocks are SOFT (toughness 0 - bare hands
+  // get the over-sharp bonus) but hold only a handful of stone; fallen logs are
+  // sure-drop gathers (chance 1, fixed output - the pile variant yields 2).
+  const tough = mineableToughnessOf(def, m.variant);
+  // Hand-gathers (toughness 0) are QUIET pickups: no tool-hit clink/thunk (the
+  // drop collect is the feedback) and NEVER a tool swing - a pickaxe on a small
+  // fieldstone would burn durability for zero benefit.
+  if (tough !== 0) hitSound(def.drop === "wood" ? "hit_wood" : "hit_stone", opts); // TODO: dedicated "too tough" clink when 0 yield
+  const handOpts = (tough === 0) ? Object.assign({}, opts, { tooled: false }) : opts;
+  const { toolId, sharpness } = resolveTooled(m.typeId, handOpts);
   // Too tough for the tool at all? Tell the player (manual strikes only, so a
   // mining hut on gold does not spam the event log).
-  if (effectiveMult(toolId, sharpness, def.toughness || 1) <= 0
+  if (effectiveMult(toolId, sharpness, tough) <= 0
       && !(opts && opts.building)) {
     const what = GD.resources[def.drop] ? GD.resources[def.drop].name : def.drop;
+    const need = (def.tool === "hatchet") ? "a hatchet" : "a pickaxe";
     postEvent(toolId ? ("Your tool is too weak to mine " + what + ".")
-                     : ("You need a pickaxe to mine " + what + "."));
+                     : ("You need " + need + " to gather " + what + "."));
   }
-  const dropCount = harvestRoll(m.typeId, toolId, sharpness);
+  let dropCount = harvestRoll(m.typeId, toolId, sharpness, {
+    toughness: tough,
+    chance: (def.dropChance != null) ? def.dropChance : undefined,
+    output: mineableOutputOf(def, m.variant) != null ? mineableOutputOf(def, m.variant) : undefined,
+  });
+  // Deplete the stock: clamp this swing's yield to what is left, write the
+  // remainder, and remove the mineable once it runs dry.
+  if (dropCount > 0) {
+    const fullStock = mineableStockOf(def, m.variant);
+    const full = (fullStock != null) ? fullStock : Infinity;
+    if (full !== Infinity) {
+      const left = mineableStockAt(col, row, full);
+      if (dropCount > left) dropCount = left;
+      if (dropCount <= 0) return 0;
+      const remain = left - dropCount;
+      setMineableStock(col, row, remain);
+      if (remain <= 0) {
+        setRockRaw(col, row, -1); // mined out: gone for good
+        const what = GD.resources[def.drop] ? GD.resources[def.drop].name : def.drop;
+        if (!(opts && opts.building)) postEvent("The " + (def.name || what) + " is mined out.");
+      }
+    }
+  }
   // noDrops (building harvest): bounce/sound only, no physical drops.
   const spawnCount = (opts && opts.noDrops) ? 0 : dropCount;
   G.pops.set(key, { col, row, t0: G.animTime, drop: def.drop, dropCount: spawnCount, dropped: false });
@@ -329,6 +378,21 @@ export function renderFx() {
       fxctx.drawImage(img, px - w / 2, py - h / 2, w, h);
     }
   }
+
+  // Animated grab-hand cursor over hand-gatherable pickups (fallen logs, small
+  // fieldstone): cycles GD.harvest.grabCursor.frames while hovering/holding.
+  // Frames that failed to load are skipped, so a broken frame just shortens
+  // the cycle instead of blinking the cursor out.
+  if (G.showGrab && !tool && !G.farmCursor && G.mouse.on) {
+    const frames = G.grabFrames.filter((f) => f && f.complete && f.naturalWidth);
+    if (frames.length) {
+      const ms = (GD.harvest.grabCursor && GD.harvest.grabCursor.frameMs) || 160;
+      const img = frames[Math.floor(G.animTime / ms) % frames.length];
+      const px = G.mouse.x, py = G.mouse.y + (TOPBAR_H + SUBBAR_H);
+      const w = img.naturalWidth * FARM_CURSOR_SCALE, h = img.naturalHeight * FARM_CURSOR_SCALE;
+      fxctx.drawImage(img, px - w / 2, py - h / 2, w, h);
+    }
+  }
 }
 
 // Harvest a specific object (dispatch by kind). opts forwards tool behavior
@@ -339,4 +403,14 @@ export function doHarvest(obj, opts) {
   return obj.mineable
     ? harvestMineable(obj.col, obj.row, opts)
     : harvestTree(obj.col, obj.row, opts);
+}
+
+// The hold-harvest CATEGORY of a clickable object: "tree", "mine" (tool-worked
+// mineables - drives the pickaxe cursor + cadence), or "hand" (toughness-0
+// pickups: fallen logs, small fieldstone - no tool cursor, bare-hand cadence).
+// Shared by input.js (click lock) and sim.js (hold re-target) so they agree.
+export function harvestCategory(obj) {
+  if (!obj.mineable) return "tree";
+  const def = GD.objects[obj.kind];
+  return (def && mineableToughnessOf(def, obj.variant) === 0) ? "hand" : "mine";
 }

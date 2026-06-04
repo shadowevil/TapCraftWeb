@@ -8,7 +8,7 @@ import { G } from "./state.js";
 import { canvas } from "./dom.js";
 import { screenToWorld, worldToCell, minZoom } from "./iso.js";
 import { objectAt, buildingAt } from "./render.js";
-import { doHarvest } from "./resources.js";
+import { doHarvest, harvestCategory } from "./resources.js";
 import { farmObjectClick, farmGroundClick } from "./farming.js";
 import { placeBuilding, footprintOf } from "./buildings.js";
 import { onBuildingSelected, onBuildingPlaced, cycleTownHalls } from "./ui.js";
@@ -75,9 +75,10 @@ canvas.addEventListener("pointerdown", (e) => {
   if (obj && farmObjectClick(obj)) return; // wheat / grass patch: single-click, never a hold
   if (obj) {
     G.harvesting = true;
-    // Lock the hold to a CATEGORY ("tree" | "mine") so a drag keeps harvesting
-    // the same family (any vein/rock counts as "mine").
-    G.harvestKind = obj.mineable ? "mine" : "tree";
+    // Lock the hold to a CATEGORY ("tree" | "mine" | "hand") so a drag keeps
+    // harvesting the same family. "hand" = toughness-0 pickups (fallen logs,
+    // small fieldstone): no tool cursor for those.
+    G.harvestKind = harvestCategory(obj);
     doHarvest(obj);              // first harvest is immediate
     G.lastHarvestAt = G.animTime;
   } else {

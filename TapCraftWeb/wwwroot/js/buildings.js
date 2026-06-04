@@ -81,6 +81,7 @@ export function placeBuilding(type, col, row, facing) {
   if (!canPlaceFootprint(type, col, row) || !canAffordBuilding(type)) return null;
   const cost = buildCostFor(type);
   for (const res of Object.keys(cost)) G.world[res] -= cost[res];
+  updateResourceUI(); // the HUD counters must show the spend immediately (every other mutation path does this)
   const def = GD.buildings[type];
   const b = {
     id: "b_" + (G.world.tick | 0) + "_" + (G.world.buildings.length + 1),
@@ -277,13 +278,17 @@ export function buildingCenter(b) {
 
 // --- Targets ---------------------------------------------------------
 // Is a cell an eligible target for this building's target kind? A logging hut
-// (tree) targets mature trees; a mining hut (rock) targets ANY mineable on the
-// cell - rock or ore vein - so one hut works the whole mineable family. (Whether
-// it can actually extract a given vein is decided per-swing by toughness vs the
-// hut's pickaxe sharpness.)
+// (tree) targets mature trees; a mining hut (rock) targets any PICKAXE mineable
+// on the cell - rock or ore vein - so one hut works the whole mining family.
+// (Whether it can actually extract a given vein is decided per-swing by
+// toughness vs the hut's pickaxe sharpness.) Hand-gathered mineables (fallen
+// logs, def.tool !== "pickaxe") are the player's to pick up, never a hut's.
 function isEligible(targetKind, c, r) {
   if (targetKind === "tree") return stageAt(c, r) >= GD.matureStage;
-  if (targetKind === "rock") return rockRawAt(c, r) >= 0; // any encoded mineable
+  if (targetKind === "rock") {
+    const m = mineableAt(c, r);
+    return !!(m && GD.objects[m.typeId] && GD.objects[m.typeId].tool === "pickaxe");
+  }
   return false;
 }
 

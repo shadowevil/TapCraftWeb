@@ -21,6 +21,38 @@
   --tc-subbar-h: 32px;
 }
 
+/* Themed scrollbars EVERYWHERE (craft/build panel bodies, world list, console,
+   event log...): dark track, border-blue thumb, accent on hover - the stock
+   white/gray bar breaks the palette. Two mechanisms on purpose:
+   - scrollbar-width/color: Firefox + Chromium 121+ (when set, new Chromium
+     ignores the ::-webkit rules below - same themed look either way),
+   - ::-webkit-scrollbar: Safari + older Chromium. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--tc-border) rgba(10, 16, 30, 0.55);
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: rgba(10, 16, 30, 0.55);
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--tc-border);
+  border-radius: 8px;
+  border: 2px solid rgba(10, 16, 30, 0.55); /* inset look: thumb floats in the track */
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--tc-accent-2);
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* Canvas fills everything below both top bars. */
 /* WebGL world canvas: shares #tc-canvas's exact rect but sits BEHIND it. #tc-canvas
    becomes a transparent 2D overlay (vectors/text/FX) that still receives input. */
@@ -840,8 +872,23 @@ body.tc-menu-mode .tc-crafted {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 70vh;
+  max-height: 60vh;
   overflow-y: auto;
+}
+
+/* Flex children of a capped scroll column must NOT shrink: without this the
+   entries COMPRESS to fit max-height (bunching up) instead of overflowing
+   into the scrollbar. */
+.tc-panel-body > * {
+  flex-shrink: 0;
+}
+
+/* Craft queue bar: pinned footer at the bottom of the panel, outside the
+   scrollable recipe list - always visible while anything is crafting. */
+.tc-craft-queue-bar {
+  padding: 6px 10px 10px;
+  background: rgba(0, 0, 0, 0.22);
+  border-top: 1px solid var(--tc-border);
 }
 
 /* Craft entries ------------------------------------------------------ */

@@ -652,13 +652,33 @@ function rockZonedAt(c, r, tile) {
   }
   return -1;
 }
+// Fallen logs (mineable typeIndex 3): sparse hand-gatherable wood lying through
+// FOREST terrain. Sampled from the SAME forest noise the tree pass uses - but
+// never consulting the tree layer itself (trees check the rock layer, so the
+// dependency stays one-way): where the woods grow thick, a few would-be trees
+// lie felled as logs instead. Variants 0-3 = single logs (1 wood), 4 = the pile
+// (2 wood); all knobs in GD.worldgen.logs.
+function logScatterAt(c, r, tile) {
+  const lg = GD.worldgen.logs;
+  if (!lg || !(lg.density > 0) || tile !== "grass") return -1;
+  const noise = gen.fForest(c * FOREST_SCALE, r * FOREST_SCALE);
+  if (noise <= (lg.minForest != null ? lg.minForest : 0.55)) return -1;
+  if (hash01(c, r, (gen.fSeed ^ 0x000051a7) >>> 0) >= lg.density) return -1;
+  const pile = hash01(c, r, (gen.fSeed ^ 0x0000b3c5) >>> 0) < (lg.pileChance != null ? lg.pileChance : 0.25);
+  const v = pile ? 4 : (Math.floor(hash01(c, r, (gen.fSeed ^ 0x00002e89) >>> 0) * 4) & 3);
+  return encodeMineable(3, v); // typeIndex 3 = logs
+}
 function computeRockRawAt(c, r) {
   const tile = baseTileAt(c, r);
   if (tile === "water") return -1;                  // never on ocean / lake / river
   // genVersion>=3: rock + ore live on ROCKY ground (see rockZonedAt). Needs highland to
   // exist; with none, fall back to the legacy grass scatter so the world still has ore.
-  // Older worlds (genVersion<3) keep the legacy path entirely.
-  if (gen.genVersion >= 3 && gen.highlandThresh !== Infinity) return rockZonedAt(c, r, tile);
+  // Older worlds (genVersion<3) keep the legacy path entirely. Fallen logs scatter on
+  // whatever grass the rock/ore passes left empty (both paths).
+  if (gen.genVersion >= 3 && gen.highlandThresh !== Infinity) {
+    const v = rockZonedAt(c, r, tile);
+    return (v >= 0) ? v : logScatterAt(c, r, tile);
+  }
   // genVersion>=2: bias stone/ore toward higher ground (rocky hills) while keeping
   // some in the lowlands. Neutral (1.0) at mid height; >1 up high, <1 down low.
   const hMul = (gen.genVersion >= 2)
@@ -689,7 +709,7 @@ function computeRockRawAt(c, r) {
       }
     }
   }
-  return -1;
+  return logScatterAt(c, r, tile);
 }
 function computeStageAt(c, r) {
   if (gen.forestDensity <= 0) return -1;
@@ -1174,9 +1194,39 @@ function revertTilled(e, c, r) {
   G.floorEpoch++;
 }
 // Cosmetic-decor removal flag (foraged grass patches): the procedural decoration
-// at this cell no longer spawns/draws once cleared.
+// at this cell no longer spawns/draws once cleared. Clearing also removes any
+// SPREAD-spawned bush on the cell (e.dsp) - foraging takes whichever is shown.
 export function decorClearedAt(c, r) { const e = entryAt(c, r); return !!(e && e.dc); }
-export function setDecorCleared(c, r) { ensureEntry(c, r).dc = 1; }
+export function setDecorCleared(c, r) { const e = ensureEntry(c, r); e.dc = 1; delete e.dsp; }
+
+// --- Ecology deltas (finite resources + spreading) -----------------------------
+// Mineable stock: each rock/ore vein holds a FINITE resource pool (data:
+// GD.objects[type].stock). e.ms records what remains once the vein is first
+// mined; an untouched vein has no entry and reports the full stock.
+export function mineableStockAt(c, r, full) {
+  const e = entryAt(c, r);
+  return (e && e.ms !== undefined) ? e.ms : full;
+}
+export function setMineableStock(c, r, v) { ensureEntry(c, r).ms = v; }
+// Spread-spawned decor (bush spreading): e.dsp places a decoration sprite on a
+// cell the procedural base left bare - or recolonizes one foraged clean (the
+// spawn clears the dc flag via setDecorSpawned).
+export function setDecorSpawned(c, r, idx) {
+  const e = ensureEntry(c, r);
+  e.dsp = idx;
+  delete e.dc; // a fresh bush recolonizes a foraged cell
+}
+// EFFECTIVE decoration at a cell: a spawned decor wins, the cleared flag hides,
+// else the procedural base. ALL decor consumers (render probe, forage hit-test,
+// spread eligibility) read this; decorAt stays the pure, cacheable base field.
+export function decorIdxAt(c, r) {
+  const e = entryAt(c, r);
+  if (e) {
+    if (e.dsp !== undefined) return e.dsp;
+    if (e.dc) return -1;
+  }
+  return decorAt(c, r);
+}
 // Rebuild the live tilled-tile counter after a load (mods came straight from disk).
 export function countTilled(m) {
   let n = 0;
@@ -1235,16 +1285,20 @@ export function setRockRaw(c, r, v) { ensureEntry(c, r).rk = v; }
 // non-growable, advance, write both fields back into the same entry object.
 // `gainMul` is the precomputed gain for AMORTIZED bands; EXACT bands derive their
 // gain from growthStep here. Semantics are identical to the old grow() closure.
+// Returns the cell's EFFECTIVE tree stage (after any growth applied this call),
+// or undefined for farm cells - the sim feeds it to the ecology spread hook so
+// spreading needs no second keyed lookup (mature tree = seed source, empty cell
+// = potential bush source).
 export function growCell(c, r, mature, stageFull, gainMul, exact, t, seed, g) {
   const mods = G.world.mods, col = wrapCol(c), row = wrapRow(r);
   let cm, e;
   if (mods.size > 0) { cm = mods.get(col); if (cm !== undefined) e = cm.get(row); }
   // Tilled farmland (always a delta): wheat growth / unplanted revert instead of trees.
-  if (e !== undefined && e.t !== undefined && isTilledTile(e.t)) { growFarmCell(e, c, r, stageFull, gainMul, exact, t, seed, g); return; }
+  if (e !== undefined && e.t !== undefined && isTilledTile(e.t)) { growFarmCell(e, c, r, stageFull, gainMul, exact, t, seed, g); return undefined; }
   const st = (e && e.st !== undefined) ? e.st : baseStageAt(c, r);
-  if (st < 0 || st >= mature) return;
+  if (st < 0 || st >= mature) return st;
   const gain = exact ? growthStep(c, r, t, seed) : gainMul;
-  if (gain <= 0) return;
+  if (gain <= 0) return st;
   let pr = ((e && e.pr !== undefined) ? e.pr : baseProgressAt(c, r)) + gain * g;
   let stage = st;
   if (exact) {
@@ -1258,4 +1312,5 @@ export function growCell(c, r, mature, stageFull, gainMul, exact, t, seed, g) {
     e = {}; cm.set(row, e);
   }
   e.st = stage; e.pr = pr;
+  return stage;
 }

@@ -131,7 +131,8 @@ export function drawMinimap() {
   const cppD = mmZoom;
 
   // Coordinate readout (cell under the mouse, else the focus cell): cheap, and hovering changes it
-  // without moving the map, so update it BEFORE the redraw guard below.
+  // without moving the map, so update it BEFORE the redraw guard below. (Mineable stock
+  // shows in a cursor tooltip instead - render.drawStockTooltip.)
   const hv = G.hoverTile || G.hover;
   const txt = (hv && hv.col != null) ? (hv.col + ", " + hv.row) : (fcol + ", " + frow);
   if (coordEl && coordTxt !== txt) { coordTxt = txt; coordEl.textContent = txt; }

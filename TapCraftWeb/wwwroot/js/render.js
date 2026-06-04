@@ -17,12 +17,12 @@ import {
   visibleCellBounds, spriteRect, spriteRectAt,
   buildingAnchor, buildingDiamondWorld, buildingCells,
 } from "./iso.js";
-import { popFactor, dropImage, dropScreen } from "./resources.js";
+import { popFactor, dropImage, dropScreen, harvestCategory } from "./resources.js";
 import { canPlaceFootprint, canAffordBuilding, buildingTargets, cellsInRange, hutToolKind, hutToolCount, footprintOf, yOffsetOf } from "./buildings.js";
-import { mineableAt, mineableSprite } from "./mineable.js";
+import { mineableAt, mineableSprite, mineableStockOf, mineableToughnessOf } from "./mineable.js";
 import { wetnessSize, wetnessAt } from "./wetness.js";
 import { globeWeatherAt } from "./globeweather.js";
-import { tileAt, stageAt, progressAt, chopAt, rockRawAt, baseCacheSize, decorAt, shoreDist, biomeAt, moistureAt, landHeightAt, uplandAt, wrapCol, wrapRow, hydroClassAt, iceAt, temperatureAt, snownessAt, desertAt, modsSize, clampBox, isTilledTile, tilledStageOf, wheatMature, decorClearedAt } from "./cells.js";
+import { tileAt, stageAt, progressAt, chopAt, rockRawAt, baseCacheSize, decorIdxAt, shoreDist, biomeAt, moistureAt, landHeightAt, uplandAt, wrapCol, wrapRow, hydroClassAt, iceAt, temperatureAt, snownessAt, desertAt, modsSize, clampBox, isTilledTile, tilledStageOf, wheatMature, decorClearedAt, mineableStockAt } from "./cells.js";
 import { patchAt, resolveFarmCursor } from "./farming.js";
 import * as glr from "./gl/glrender.js";
 import { uvFor } from "./gl/atlas.js";
@@ -520,14 +520,23 @@ export function render() {
   if (G.harvesting) {
     G.showHatchet = G.harvestKind === "tree";
     G.showPickaxe = G.harvestKind === "mine";
+    G.showGrab = G.harvestKind === "hand";
   } else {
     G.showHatchet = !!(G.hover && G.hover.kind === "tree" && G.hover.stage >= GD.matureStage);
-    G.showPickaxe = !!(G.hover && G.hover.mineable);
+    // Tool cursors split by how the hovered object is worked: pickaxe over
+    // pickaxe mineables (rock/ore), the animated grab hand over everything
+    // hand-gathered - pickups (fallen logs, small fieldstone), forageable seed
+    // bushes, and MATURE wheat (growing wheat keeps the pour cursor instead).
+    const cat = (G.hover && G.hover.mineable) ? harvestCategory(G.hover) : null;
+    G.showPickaxe = cat === "mine";
+    G.showGrab = cat === "hand"
+      || !!(G.hover && G.hover.kind === "grass_patch")
+      || !!(G.hover && G.hover.kind === "wheat" && G.hover.stage >= wheatMature());
   }
   // Farming cursors: the swinging hoe (Shift over tillable ground) and the static
   // pour/fill/seeds icons (sets G.showHoe / G.farmCursor from the hover state).
   resolveFarmCursor();
-  const wantCursor = (G.showHatchet || G.showPickaxe || G.showHoe || G.farmCursor) ? "none" : "default";
+  const wantCursor = (G.showHatchet || G.showPickaxe || G.showGrab || G.showHoe || G.farmCursor) ? "none" : "default";
   if (canvas.style.cursor !== wantCursor) canvas.style.cursor = wantCursor;
   const z = G.cam.zoom;
   const b = visibleCellBounds();
@@ -622,13 +631,12 @@ export function render() {
       // the per-cell object probe there.
       const obj = (tile === "water") ? null : cellObject(c, r);
       // Cosmetic ground-cover decoration: only on a currently-bare grass cell not under
-      // a building. decorAt is base-pure (cacheable); the !obj + !covered guards make it
-      // delta-aware so nothing draws under a grown/placed object or a building. A FORAGED
-      // grass patch (decor-cleared delta) is gone for good - never redrawn as decor.
+      // a building. decorIdxAt is the EFFECTIVE decor: spread-spawned bushes draw, a
+      // FORAGED patch (decor-cleared delta) stays gone, else the cacheable procedural
+      // base; the !obj + !covered guards keep it off grown/placed objects + buildings.
       let decorIdx = -1;
       if (decorOn && !obj && tile === "grass" && !(decorCovered && decorCovered.has(wrapCol(c) + "," + wrapRow(r)))) {
-        decorIdx = decorAt(c, r);
-        if (decorIdx >= 0 && decorClearedAt(c, r)) decorIdx = -1;
+        decorIdx = decorIdxAt(c, r);
       }
       if (obj || isActive || decorIdx >= 0) entities.push({ depth: r + c, col: c, c, r, obj, decorIdx, kind: "obj" });
     }
@@ -737,6 +745,10 @@ export function render() {
   renderRain();
   // Lightning flashes (storm) on top of the rain.
   renderLightning();
+
+  // Stock tooltip: remaining resource of the hovered finite mineable, riding
+  // the cursor (in front of the weather - it is UI, not world).
+  drawStockTooltip();
 
   // Dev cell inspector (console: debugoverlay true).
   if (G.debugOverlay) drawDebugOverlay(z);
@@ -939,6 +951,35 @@ function renderFlameGlows(z, vb) {
   }
 }
 
+// Stock tooltip: hovering a FINITE mineable shows its name + remaining stock in
+// a small pill that rides the cursor - below it, flipping above near the bottom
+// edge - so you watch a vein run dry right where you are mining. Styled to
+// match the minimap coordinate pill (dark rounded bg, small monospace).
+function drawStockTooltip() {
+  if (G.inMenu || !G.mouse.on || !G.hover || !G.hover.mineable) return;
+  const def = GD.objects[G.hover.kind];
+  const full = def ? mineableStockOf(def, G.hover.variant) : null; // variant-aware (small rocks hold 25)
+  if (full == null) return;
+  const left = mineableStockAt(G.hover.col, G.hover.row, full);
+  const txt = (def.name || G.hover.kind) + "  " + left;
+  ctx.font = "600 11px Consolas, monospace";
+  const tw = ctx.measureText(txt).width;
+  const padX = 7, h = 18, w = tw + padX * 2;
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  const x = Math.max(4, Math.min(cw - w - 4, G.mouse.x - w / 2)); // centred, clamped on-screen
+  let y = G.mouse.y + 24;                        // below the cursor (clear of the tool icon)...
+  if (y + h > ch - 4) y = G.mouse.y - 16 - h;    // ...above when near the bottom edge
+  ctx.fillStyle = "rgba(10, 16, 30, 0.78)";
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, 4);
+  ctx.fill();
+  const prevBaseline = ctx.textBaseline;
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#dce6ff";
+  ctx.fillText(txt, x + padX, y + h / 2 + 0.5);
+  ctx.textBaseline = prevBaseline;
+}
+
 // --- Dev: live cell inspector overlay --------------------------------
 // Highlights the hovered cell and prints everything known about that tile and
 // any object on it (raw stage/rock/progress/chop, sprite dims, lift, screen
@@ -1011,6 +1052,12 @@ function drawDebugOverlay(z) {
         : (obj.kind === "wheat") ? (obj.stage >= wheatMature() ? " MATURE" : "") : "";
       oLines.push("object  " + obj.kind + (obj.stage != null ? " stage=" + obj.stage + matureMark
         : (obj.variant != null ? " variant=" + obj.variant : "")));
+      // Finite mineables: remaining stock out of the (variant-aware) pool.
+      if (obj.mineable) {
+        const mdef = GD.objects[obj.kind];
+        const mfull = mdef ? mineableStockOf(mdef, obj.variant) : null;
+        if (mfull != null) oLines.push("  stock " + mineableStockAt(c, r, mfull) + "/" + mfull + "  toughness " + mineableToughnessOf(mdef, obj.variant));
+      }
       oLines.push("  yOffset=" + obj.yOffset + " sc=" + (obj.sc || 1).toFixed(2) + " flip=" + (!!obj.flip));
       oLines.push("  sprite " + (img && img.naturalWidth || "?") + "x" + (img && img.naturalHeight || "?") + (img && img.complete ? "" : " (loading)"));
       oLines.push("  src " + ((img && img.src) ? img.src.split("/").pop() : "(none)"));
@@ -1025,7 +1072,7 @@ function drawDebugOverlay(z) {
     if (bd) oLines.push("building  " + bd.type + " @(" + bd.col + "," + bd.row + ") tools=" + (bd.tools ? bd.tools.count : 0));
     // Decoration (cosmetic ground cover) the renderer would draw here if the cell is
     // bare; notes when it is hidden because an object or building occupies the tile.
-    const di = inB ? decorAt(c, r) : -1;
+    const di = inB ? decorIdxAt(c, r) : -1;
     if (di >= 0) {
       const dimg = G.decorImages[di];
       const dp = decorDrawParams(di, c, r);
